@@ -222,3 +222,17 @@ if __name__ == "__main__":
 
     # 5. Visor Final
     FinalVisor(mri_obj, ct_final); plt.show()
+
+    # 6. GUARDAR EL RESULTAT
+    output_dir = os.path.dirname(ct_path)
+    output_filename = "Registered_CT_Result.nii.gz"
+    output_full_path = os.path.join(output_dir, output_filename)
+    
+    print(f"\n--- 6. GUARDANT RESULTAT ---")
+    try:
+        sitk.WriteImage(ct_final, output_full_path)
+        print(f"Fitxer desat correctament a: {output_full_path}")
+    except Exception as e:
+        print(f"Error en desar el fitxer: {e}")
+
+    plt.show() # Mostrem el visor final i el programa es quedarà obert fins que tanquis la finestra
