@@ -1,0 +1,30 @@
+<<<<<<< HEAD
+# Entorns i memòria cau
+env/
+.venv/
+__pycache__/
+.DS_Store
+
+# Dades, imatges i models
+Data/
+models/
+*.nii
+*.nii.gz
+*.pth
+=======
+# Medical images
+*.nii
+*.nii.gz
+*.dcm
+
+# Models
+*.pth
+*.h5
+
+# Zips grans
+*.zip
+
+# Carpetes pesades
+checkpoints/
+data/
+>>>>>>> fe36d020 (Clean repo without large files)
