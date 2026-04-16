@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Entorns i memòria cau
 env/
 .venv/
@@ -11,7 +10,6 @@ models/
 *.nii
 *.nii.gz
 *.pth
-=======
 # Medical images
 *.nii
 *.nii.gz
@@ -27,4 +25,3 @@ models/
 # Carpetes pesades
 checkpoints/
 data/
->>>>>>> fe36d020 (Clean repo without large files)
