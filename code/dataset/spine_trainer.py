@@ -209,7 +209,7 @@ for epoch in range(start_epoch, num_epochs):
         data_range = torch.tensor(1.0, device=output.device)
         ssim = ssim_loss(output_ssim, ct_ssim, data_range=data_range)
 
-        loss = 0.8 * l1 + 0.2 * (1 - ssim)
+        loss = 0.8 * l1 + 0.2 * (1 - ssim) # x 10 ambos
 
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)

@@ -97,7 +97,7 @@ if __name__ == "__main__":
 
         ct_arr = sitk.GetArrayFromImage(real_ct_resampled)
 
-        # Generación de máscara de tejido (excluyendo aire)
+        # Generación de máscara de tejido (excluyendo aire), dice coef os i teixit bla SSIM
         mask = ct_arr > -500 
         
         if np.any(mask):

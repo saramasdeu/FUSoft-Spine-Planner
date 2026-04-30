@@ -63,7 +63,7 @@ class SpineDataset(Dataset):
 augment_pipeline = tio.Compose([
     tio.RandomFlip(axes=(0,)),                       # Inversió mirall esquerra-dreta
     tio.RandomNoise(std=(0, 0.05)),                  # Soroll Gaussià aleatori a la MRI
-    tio.RandomBiasField(coefficients=(0, 0.1)),      # Simula variacions d'intensitat MRI
+    tio.RandomBiasField(coefficients=(0, 0.1)),      # Simula variacions d'intensitat MRI (pujar)
     tio.RandomAffine(scales=(0.95, 1.05), degrees=5),# Rotacions de +-5 graus
 ])
 

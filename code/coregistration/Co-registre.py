@@ -17,9 +17,7 @@ def select_file(titol):
         result = subprocess.run(['osascript', '-e', apple_script], capture_output=True, text=True)
         return result.stdout.strip()
     else:
-        root = tk.Tk()
-        root.withdraw() 
-        root.attributes('-topmost', True)
+        root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True)
         path = filedialog.askopenfilename(title=titol, filetypes=[("Medical Images", "*.nii *.nii.gz *.dcm *.mha"), ("Tots els arxius", "*.*")])
         root.destroy()
         return path
@@ -31,7 +29,8 @@ def upload_image(ruta, tipus_pixel=None):
     except: return None
     
 def calcular_dice_global(mri_img, ct_img):
-    ct_mask = sitk.BinaryThreshold(ct_img, lowerThreshold=-500.0, upperThreshold=3000.0, insideValue=1, outsideValue=0)
+    # Llindars optimitzats per al càlcul matemàtic
+    ct_mask = sitk.BinaryThreshold(ct_img, lowerThreshold=-150.0, upperThreshold=1500.0, insideValue=1, outsideValue=0)
     otsu_filter = sitk.OtsuThresholdImageFilter()
     otsu_filter.SetInsideValue(0); otsu_filter.SetOutsideValue(1)
     mri_mask = otsu_filter.Execute(mri_img)
@@ -41,6 +40,7 @@ def calcular_dice_global(mri_img, ct_img):
     return overlap_filter.GetDiceCoefficient()
 
 # --- CLASSES D'INTERFÍCIE ---
+
 class VisorRaw:
     def __init__(self, mri_img, ct_img):
         self.mri = sitk.GetArrayFromImage(mri_img); self.ct = sitk.GetArrayFromImage(ct_img)
@@ -134,48 +134,90 @@ class CockpitMultiplanar:
         self.c_mask = np.where(c_arr > 200, 1.0, 0.0)
 
     def draw_initial(self):
-        self.recalculate_transformation()
-        self.im1_mri = self.ax1.imshow(np.flipud(self.m_arr[self.idx_z, :, :]), cmap='gray')
-        self.im1_ct = self.ax1.imshow(np.flipud(self.c_mask[self.idx_z, :, :]), cmap='Greens', alpha=0.5, vmin=0, vmax=1)
-        self.im2_mri = self.ax2.imshow(np.flipud(self.m_arr[:, self.idx_y, :]), cmap='gray')
-        self.im2_ct = self.ax2.imshow(np.flipud(self.c_mask[:, self.idx_y, :]), cmap='Greens', alpha=0.5, vmin=0, vmax=1)
-        self.im3_mri = self.ax3.imshow(np.flipud(self.m_arr[:, :, self.idx_x]), cmap='gray')
-        self.im3_ct = self.ax3.imshow(np.flipud(self.c_mask[:, :, self.idx_x]), cmap='Greens', alpha=0.5, vmin=0, vmax=1)
+        self.recalculate_transformation(); self.draw_views()
 
     def update_tx(self, val):
         for k, s in zip(['rx','ry','rz','tx','ty','tz'], [self.s_rx, self.s_ry, self.s_rz, self.s_tx, self.s_ty, self.s_tz]): self.params[k] = s.val
-        self.recalculate_transformation(); self.update_views()
+        self.recalculate_transformation(); self.draw_views()
     def update_nav(self, val):
-        self.idx_z, self.idx_y, self.idx_x = int(self.s_nz.val), int(self.s_ny.val), int(self.s_nx.val); self.update_views()
-    def update_views(self):
-        self.im1_mri.set_data(np.flipud(self.m_arr[self.idx_z, :, :])); self.im1_ct.set_data(np.flipud(self.c_mask[self.idx_z, :, :]))
-        self.im2_mri.set_data(np.flipud(self.m_arr[:, self.idx_y, :])); self.im2_ct.set_data(np.flipud(self.c_mask[:, self.idx_y, :]))
-        self.im3_mri.set_data(np.flipud(self.m_arr[:, :, self.idx_x])); self.im3_ct.set_data(np.flipud(self.c_mask[:, :, self.idx_x]))
+        self.idx_z, self.idx_y, self.idx_x = int(self.s_nz.val), int(self.s_ny.val), int(self.s_nx.val); self.draw_views()
+    def draw_views(self):
+        self.ax1.clear(); self.ax1.imshow(np.flipud(self.m_arr[self.idx_z, :, :]), cmap='gray')
+        self.ax1.imshow(np.flipud(self.c_mask[self.idx_z, :, :]), cmap='Greens', alpha=0.5, vmin=0, vmax=1)
+        self.ax1.set_title(f"AXIAL (Z={self.idx_z})"); self.ax1.axis('off')
+
+        self.ax2.clear(); self.ax2.imshow(np.flipud(self.m_arr[:, self.idx_y, :]), cmap='gray')
+        self.ax2.imshow(np.flipud(self.c_mask[:, self.idx_y, :]), cmap='Greens', alpha=0.5, vmin=0, vmax=1)
+        self.ax2.set_title(f"CORONAL (Y={self.idx_y})"); self.ax2.axis('off')
+
+        self.ax3.clear(); self.ax3.imshow(np.flipud(self.m_arr[:, :, self.idx_x]), cmap='gray')
+        self.ax3.imshow(np.flipud(self.c_mask[:, :, self.idx_x]), cmap='Greens', alpha=0.5, vmin=0, vmax=1)
+        self.ax3.set_title(f"SAGITAL (X={self.idx_x})"); self.ax3.axis('off')
         self.fig.canvas.draw_idle()
+
     def close(self, event): plt.close(self.fig)
 
-class FinalVisor:
-    def __init__(self, mri, ct_reg):
-        self.mri = sitk.GetArrayFromImage(mri); self.ct = sitk.GetArrayFromImage(ct_reg)
-        self.z, self.y, self.x = self.mri.shape; self.pct = 0.5
-        self.fig, (self.ax1, self.ax2, self.ax3) = plt.subplots(1, 3, figsize=(18, 6))
-        plt.subplots_adjust(bottom=0.2); self.s = Slider(plt.axes([0.2, 0.05, 0.6, 0.03]), 'Sync Browse', 0, 1, valinit=0.5)
-        self.s.on_changed(self.upd); self.draw()
+class FinalVisorInteractiu:
+    def __init__(self, mri, ct_reg, dice_val):
+        self.mri_arr = sitk.GetArrayFromImage(mri)
+        self.ct_arr = sitk.GetArrayFromImage(ct_reg)
+        
+        # Generem màscares per a visualització (mateixes que el Dice)
+        self.mri_mask = sitk.GetArrayFromImage(sitk.OtsuThreshold(mri, 0, 1))
+        self.ct_mask = np.where(self.ct_arr > 200, 1, 0)
+        
+        self.z, self.y, self.x = self.mri_arr.shape
+        self.idx = self.z // 2
+        
+        self.fig, (self.ax1, self.ax2, self.ax3) = plt.subplots(1, 3, figsize=(18, 8))
+        self.fig.canvas.manager.set_window_title(f'Validació Co-registre (DICE: {dice_val:.4f})')
+        plt.subplots_adjust(bottom=0.15)
 
-    def draw(self):
-        iz, iy, ix = int(self.pct*(self.z-1)), int(self.pct*(self.y-1)), int(self.pct*(self.x-1))
-        self.im1_base = self.ax1.imshow(np.flipud(self.mri[iz,:,:]), cmap='gray')
-        self.im1_over = self.ax1.imshow(np.ma.masked_where(np.flipud(self.ct[iz,:,:]) < 200, np.flipud(self.ct[iz,:,:])), cmap='spring', alpha=0.6)
-        self.im2_base = self.ax2.imshow(np.flipud(self.mri[:,iy,:]), cmap='gray')
-        self.im2_over = self.ax2.imshow(np.ma.masked_where(np.flipud(self.ct[:,iy,:]) < 200, np.flipud(self.ct[:,iy,:])), cmap='spring', alpha=0.6)
-        self.im3_base = self.ax3.imshow(np.flipud(self.mri[:,:,ix]), cmap='gray')
-        self.im3_over = self.ax3.imshow(np.ma.masked_where(np.flipud(self.ct[:,:,ix]) < 200, np.flipud(self.ct[:,:,ix])), cmap='spring', alpha=0.6)
+        # Mantenim el slider per visualització, però connectem l'scroll
+        self.slider = Slider(plt.axes([0.2, 0.05, 0.6, 0.03]), 'Tall Z', 0, self.z-1, valinit=self.idx, valstep=1)
+        self.slider.on_changed(self.update_from_slider)
+        
+        # Connectem l'esdeveniment de la roda del ratolí
+        self.fig.canvas.mpl_connect('scroll_event', self.on_scroll)
+        
+        # Inicialitzem els gràfics (pre-allocation per velocitat)
+        self.im1 = self.ax1.imshow(np.flipud(self.mri_arr[self.idx]), cmap='gray')
+        self.ov1 = self.ax1.imshow(np.ma.masked_where(np.flipud(self.mri_mask[self.idx])==0, np.ones_like(self.mri_arr[0])), cmap='winter', alpha=0.3)
+        
+        self.im2 = self.ax2.imshow(np.flipud(self.ct_arr[self.idx]), cmap='gray', vmin=-200, vmax=1000)
+        self.ov2 = self.ax2.imshow(np.ma.masked_where(np.flipud(self.ct_mask[self.idx])==0, np.ones_like(self.ct_arr[0])), cmap='autumn', alpha=0.3)
+        
+        self.im3_m = self.ax3.imshow(np.flipud(self.mri_mask[self.idx]), cmap='Blues', alpha=0.7)
+        self.im3_c = self.ax3.imshow(np.flipud(self.ct_mask[self.idx]), cmap='Oranges', alpha=0.5)
 
-    def upd(self, val):
-        self.pct = val; iz, iy, ix = int(self.pct*(self.z-1)), int(self.pct*(self.y-1)), int(self.pct*(self.x-1))
-        self.im1_base.set_data(np.flipud(self.mri[iz,:,:])); self.im1_over.set_data(np.ma.masked_where(np.flipud(self.ct[iz,:,:]) < 200, np.flipud(self.ct[iz,:,:])))
-        self.im2_base.set_data(np.flipud(self.mri[:,iy,:])); self.im2_over.set_data(np.ma.masked_where(np.flipud(self.ct[:,iy,:]) < 200, np.flipud(self.ct[:,iy,:])))
-        self.im3_base.set_data(np.flipud(self.mri[:,:,ix])); self.im3_over.set_data(np.ma.masked_where(np.flipud(self.ct[:,:,ix]) < 200, np.flipud(self.ct[:,:,ix])))
+        for ax in [self.ax1, self.ax2, self.ax3]: ax.axis('off')
+        self.update_display()
+
+    def on_scroll(self, event):
+        if event.button == 'up':
+            self.idx = min(self.idx + 1, self.z - 1)
+        elif event.button == 'down':
+            self.idx = max(self.idx - 1, 0)
+        
+        # Sincronitzem el slider visualment i actualitzem
+        self.slider.set_val(self.idx)
+
+    def update_from_slider(self, val):
+        self.idx = int(val)
+        self.update_display()
+
+    def update_display(self):
+        # Fem servir set_data per evitar el "lag"
+        self.im1.set_data(np.flipud(self.mri_arr[self.idx]))
+        self.ov1.set_data(np.ma.masked_where(np.flipud(self.mri_mask[self.idx])==0, np.ones_like(self.mri_arr[0])))
+        
+        self.im2.set_data(np.flipud(self.ct_arr[self.idx]))
+        self.ov2.set_data(np.ma.masked_where(np.flipud(self.ct_mask[self.idx])==0, np.ones_like(self.ct_arr[0])))
+        
+        self.im3_m.set_data(np.flipud(self.mri_mask[self.idx]))
+        self.im3_c.set_data(np.flipud(self.ct_mask[self.idx]))
+        
+        self.ax1.set_title(f"MRI + Màscara (Tall {self.idx})")
         self.fig.canvas.draw_idle()
 
 # --- EXECUCIÓ PRINCIPAL ---
@@ -186,28 +228,22 @@ if __name__ == "__main__":
 
     mri_obj = upload_image(mri_path, sitk.sitkFloat32); ct_obj = upload_image(ct_path, sitk.sitkFloat32)
     
-    # 1. Exploració inicial
     VisorRaw(mri_obj, ct_obj); plt.show()
         
-    # 2. Retall CT
     crop_tool = CuttingTool(ct_obj); plt.show()
     z_cut = crop_tool.actual_cut
     ct_crop_obj = sitk.RegionOfInterest(ct_obj, [ct_obj.GetSize()[0], ct_obj.GetSize()[1], ct_obj.GetSize()[2]-z_cut], [0,0,z_cut])
 
-    # 3. Elecció: Manual o Automàtic directe
     print("\n--- PAS 3: AJUST GEOMÈTRIC ---")
     opcio = input("Vols fer un ajust MANUAL abans de l'automàtic? (s/n): ").lower()
-    
     tx_geometry = sitk.CenteredTransformInitializer(mri_obj, ct_crop_obj, sitk.Euler3DTransform(), sitk.CenteredTransformInitializerFilter.GEOMETRY)
     
     if opcio == 's':
-        cockpit = CockpitMultiplanar(mri_obj, ct_crop_obj, tx_geometry)
-        plt.show()
+        cockpit = CockpitMultiplanar(mri_obj, ct_crop_obj, tx_geometry); plt.show()
         tx_inicial = cockpit.final_manual_transformation
     else:
         tx_inicial = tx_geometry
 
-    # 4. Registre Automàtic
     print("\n--- PAS 4: REGISTRE AUTOMÀTIC ---")
     R = sitk.ImageRegistrationMethod()
     R.SetMetricAsMattesMutualInformation(50)
@@ -218,21 +254,16 @@ if __name__ == "__main__":
     tx_final = R.Execute(mri_obj, ct_crop_obj)
     ct_final = sitk.Resample(ct_crop_obj, mri_obj, tx_final, sitk.sitkLinear, -1000.0)
     
-    print(f"DICE: {calcular_dice_global(mri_obj, ct_final):.4f}")
+    val_dice = calcular_dice_global(mri_obj, ct_final)
+    print(f"DICE FINAL: {val_dice:.4f}")
 
-    # 5. Visor Final
-    FinalVisor(mri_obj, ct_final); plt.show()
+    # Visor Final amb Scroll Optimitzat
+    FinalVisorInteractiu(mri_obj, ct_final, val_dice); plt.show()
 
-    # 6. GUARDAR EL RESULTAT
+    # Guardar Resultat
     output_dir = os.path.dirname(ct_path)
-    output_filename = "Registered_CT_Result.nii.gz"
-    output_full_path = os.path.join(output_dir, output_filename)
-    
-    print(f"\n--- 6. GUARDANT RESULTAT ---")
+    output_full_path = os.path.join(output_dir, "Registered_CT_Result.nii.gz")
     try:
         sitk.WriteImage(ct_final, output_full_path)
         print(f"Fitxer desat correctament a: {output_full_path}")
-    except Exception as e:
-        print(f"Error en desar el fitxer: {e}")
-
-    plt.show() # Mostrem el visor final i el programa es quedarà obert fins que tanquis la finestra
+    except Exception as e: print(f"Error en desar: {e}")

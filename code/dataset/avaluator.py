@@ -14,7 +14,7 @@ import torch.nn as nn
 # 1. RUTES I CONFIGURACIÓ
 # ==========================================================
 MRI_PATH = "/Users/saramasdeusans/Desktop/sub-0003_T1w cropped.nii.gz"
-MODEL_WEIGHTS = "/Users/saramasdeusans/Desktop/TFG_FUSOFT/code/dataset/fine_tuned_spine_epoch_50.pth" 
+MODEL_WEIGHTS = "/Users/saramasdeusans/Desktop/TFG_FUSOFT/fine_tuned_spine_epoch_50.pth" 
 OUTPUT_NAME = "Pseudo_CT_sub-0001_Resultat.nii.gz"
 DEVICE = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
