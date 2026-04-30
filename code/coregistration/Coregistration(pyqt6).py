@@ -430,7 +430,7 @@ class FusoftApp(QMainWindow):
             self.btn_to_crop.setEnabled(True)
 
     def calculate_dice_score(self, registered_ct):
-        thresholded_ct = sitk.BinaryThreshold(registered_ct, -200.0, 3000.0, 1, 0)
+        thresholded_ct = sitk.BinaryThreshold(registered_ct, -150, 1500.0, 1, 0)
         components = sitk.ConnectedComponent(sitk.Cast(thresholded_ct, sitk.sitkUInt8))
         stats = sitk.LabelShapeStatisticsImageFilter()
         stats.Execute(components)
