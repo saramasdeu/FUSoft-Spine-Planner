@@ -155,12 +155,30 @@ class RegistrationGizmo(pg.GraphicsObject):
         self.last_mouse_position = event.scenePos()
         
         spacing = self.viewport.main_window.mri_image.GetSpacing()
-        
+        # spacing = (sx, sy, sz) — SimpleITK: x=col, y=row, z=axial
+        sx, sy, sz = spacing[0], spacing[1], spacing[2]
+        ori = self.viewport.orientation
+
         if self.active_handle in ['tx', 'ty']:
+            # En la vista Coronal el eje vertical es Z y la imagen está flipada (flipud),
+            # así que el signo de dy se invierte respecto al movimiento del ratón.
+            # En Axial y Sagittal el eje vertical es Y/Z sin flip extra en el gizmo.
+            if "Coronal" in ori:
+                # cols → X (sx), rows → Z (sz), flipud → dy_real = +delta.y (no negativo)
+                gizmo_dx = delta.x() * sx
+                gizmo_dy = delta.y() * sz   # signo positivo porque flipud invierte el eje
+            elif "Axial" in ori:
+                gizmo_dx = delta.x() * sx
+                gizmo_dy = -delta.y() * sy
+            else:  # Sagittal
+                # cols → Y (sy), rows → Z (sz), flipud → dy_real = +delta.y
+                gizmo_dx = delta.x() * sy
+                gizmo_dy = delta.y() * sz
+
             self.viewport.main_window.apply_gizmo_transform(
-                self.viewport.orientation, 
-                dx=delta.x() * spacing[0], 
-                dy=-delta.y() * spacing[1], 
+                ori,
+                dx=gizmo_dx,
+                dy=gizmo_dy,
                 is_live=True
             )
         elif self.active_handle == 'rot':
@@ -181,6 +199,119 @@ class RegistrationGizmo(pg.GraphicsObject):
         self.viewport.main_window.refresh_registration_view(is_live=False)
         event.accept()
 
+
+class ExpandedViewWindow(QMainWindow):
+    """Ventana flotante que muestra una vista ampliada de un viewer."""
+    def __init__(self, source_viewer, parent=None):
+        super().__init__(parent)
+        self.source_viewer = source_viewer
+        orientation = getattr(source_viewer, 'orientation', 'Vista')
+        self.setWindowTitle(f"Vista ampliada — {orientation}")
+        self.resize(900, 700)
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(4, 4, 4, 4)
+
+        self.image_view = pg.ImageView(view=pg.PlotItem())
+        self.image_view.ui.histogram.hide()
+        self.image_view.ui.roiBtn.hide()
+        self.image_view.ui.menuBtn.hide()
+        self.image_view.getView().setAspectLocked(True)
+        layout.addWidget(self.image_view, stretch=10)
+
+        # Slider sincronizado con el viewer original
+        self.nav_slider = QSlider(Qt.Orientation.Horizontal)
+        layout.addWidget(self.nav_slider)
+
+        self._sync_from_source()
+        self.nav_slider.valueChanged.connect(self._on_slider)
+
+        # Sincronizar slider original → ampliado
+        src_slider = getattr(source_viewer, 'slice_slider',
+                    getattr(source_viewer, 'nav_slider', None))
+        if src_slider:
+            src_slider.valueChanged.connect(self._sync_from_source)
+
+    def _get_source_slider(self):
+        return getattr(self.source_viewer, 'slice_slider',
+               getattr(self.source_viewer, 'nav_slider', None))
+
+    def _sync_from_source(self):
+        src = self._get_source_slider()
+        if src is None:
+            return
+        self.nav_slider.blockSignals(True)
+        self.nav_slider.setRange(src.minimum(), src.maximum())
+        self.nav_slider.setValue(src.value())
+        self.nav_slider.blockSignals(False)
+        self._render(src.value())
+
+    def _on_slider(self, idx):
+        # Propagar al slider original
+        src = self._get_source_slider()
+        if src:
+            src.blockSignals(True)
+            src.setValue(idx)
+            src.blockSignals(False)
+            # Forzar render en source también
+            if hasattr(self.source_viewer, 'update_slice'):
+                self.source_viewer.update_slice()
+            elif hasattr(self.source_viewer, 'render_slice'):
+                self.source_viewer.render_slice()
+        self._render(idx)
+
+    def _render(self, idx):
+        sv = self.source_viewer
+        # VolumeSliceViewer
+        if hasattr(sv, 'volume_data') and sv.volume_data is not None:
+            data = sv.volume_data
+            spacing = getattr(sv, 'spacing', (1.0, 1.0, 1.0))
+            sx, sy, sz = spacing
+            ori = sv.orientation
+            if "Axial" in ori:
+                slice_img = data[idx]
+                scx, scy = sx, sy
+            elif "Coronal" in ori:
+                slice_img = np.flipud(data[:, idx, :])
+                scx, scy = sx, sz
+            else:
+                slice_img = np.flipud(data[:, :, idx])
+                scx, scy = sy, sz
+            self.image_view.setImage(slice_img, autoLevels=True,
+                                     pos=[0, 0], scale=[scx, scy])
+        # RegistrationViewport
+        elif hasattr(sv, 'volume') and sv.volume is not None:
+            data = sv.volume
+            spacing = getattr(sv, 'spacing', (1.0, 1.0, 1.0))
+            sx, sy, sz = spacing
+            ori = sv.orientation
+            if "Axial" in ori:
+                slice_img = data[idx]
+                scx, scy = sx, sy
+            elif "Coronal" in ori:
+                raw = data[:, idx] if data.ndim == 3 else data[:, idx, :]
+                slice_img = np.flipud(raw)
+                scx, scy = sx, sz
+            else:
+                slice_img = np.flipud(data[:, :, idx])
+                scx, scy = sy, sz
+            self.image_view.setImage(
+                slice_img,
+                autoLevels=(data.ndim == 3),
+                pos=[0, 0], scale=[scx, scy]
+            )
+
+    def closeEvent(self, event):
+        src = self._get_source_slider()
+        if src:
+            try:
+                src.valueChanged.disconnect(self._sync_from_source)
+            except Exception:
+                pass
+        super().closeEvent(event)
+
 class VolumeSliceViewer(QWidget):
     def __init__(self, label):
         super().__init__()
@@ -190,15 +321,31 @@ class VolumeSliceViewer(QWidget):
         self.image_view.ui.histogram.hide()
         self.slice_slider = QSlider(Qt.Orientation.Horizontal)
         
-        layout.addWidget(self.title_label)
+        # Header row: title + expand button
+        header = QHBoxLayout()
+        header.addWidget(self.title_label)
+        btn_expand = QPushButton("⛶")
+        btn_expand.setFixedSize(26, 26)
+        btn_expand.setToolTip("Ampliar vista")
+        btn_expand.setStyleSheet("font-size:14px; padding:0;")
+        btn_expand.clicked.connect(self._open_expanded)
+        header.addWidget(btn_expand)
+        layout.addLayout(header)
         layout.addWidget(self.image_view)
         layout.addWidget(self.slice_slider)
         
         self.volume_data = None
         self.orientation = label
+        self._expanded_win = None
 
-    def load_volume(self, data):
+    def _open_expanded(self):
+        self._expanded_win = ExpandedViewWindow(self)
+        self._expanded_win.show()
+
+    def load_volume(self, data, spacing=None):
         self.volume_data = data
+        # spacing: (sx, sy, sz) en mm — SimpleITK convention (x=col, y=row, z=axial)
+        self.spacing = spacing if spacing is not None else (1.0, 1.0, 1.0)
         axis_map = {'Axial': 0, 'Coronal': 1, 'Sagittal': 2}
         max_slices = data.shape[axis_map.get(self.orientation.split()[-1], 0)]
         self.slice_slider.setRange(0, max_slices - 1)
@@ -210,15 +357,30 @@ class VolumeSliceViewer(QWidget):
         if self.volume_data is None:
             return
         idx = self.slice_slider.value()
+        sx, sy, sz = self.spacing  # x=col, y=row, z=axial
+
         if "Axial" in self.orientation:
             slice_img = self.volume_data[idx]
+            # Axial: cols→x, rows→y → aspect = sx/sy
+            h, w = slice_img.shape[:2]
+            scale_x, scale_y = sx, sy
         elif "Coronal" in self.orientation:
-            slice_img = self.volume_data[:, idx, :]
+            slice_img = np.flipud(self.volume_data[:, idx, :])
+            # Coronal: cols→x, rows→z → aspect = sx/sz
+            h, w = slice_img.shape[:2]
+            scale_x, scale_y = sx, sz
         else:
-            slice_img = self.volume_data[:, :, idx]
-            
-        final_render = slice_img if "Axial" in self.orientation else np.flipud(slice_img)
-        self.image_view.setImage(final_render, autoLevels=True)
+            slice_img = np.flipud(self.volume_data[:, :, idx])
+            # Sagittal: cols→y, rows→z → aspect = sy/sz
+            h, w = slice_img.shape[:2]
+            scale_x, scale_y = sy, sz
+
+        self.image_view.setImage(
+            slice_img, autoLevels=True,
+            pos=[0, 0],
+            scale=[scale_x, scale_y]
+        )
+        self.image_view.getView().setAspectLocked(True)
 
 class RegistrationViewport(QWidget):
     def __init__(self, label, main_window):
@@ -228,7 +390,16 @@ class RegistrationViewport(QWidget):
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
-        layout.addWidget(QLabel(f"<b>{label}</b>"))
+        # Header row: title + expand button
+        hdr = QHBoxLayout()
+        hdr.addWidget(QLabel(f"<b>{label}</b>"))
+        btn_exp = QPushButton("⛶")
+        btn_exp.setFixedSize(26, 26)
+        btn_exp.setToolTip("Ampliar vista")
+        btn_exp.setStyleSheet("font-size:14px; padding:0;")
+        btn_exp.clicked.connect(self._open_expanded)
+        hdr.addWidget(btn_exp)
+        layout.addLayout(hdr)
         
         self.image_view = pg.ImageView(view=pg.PlotItem())
         self.image_view.ui.histogram.hide()
@@ -248,10 +419,18 @@ class RegistrationViewport(QWidget):
         
         self.volume = None
         self.is_first_load = True
+        self._expanded_win = None
         self.nav_slider.valueChanged.connect(self.render_slice)
 
-    def set_volume_data(self, data):
+    def _open_expanded(self):
+        self._expanded_win = ExpandedViewWindow(self)
+        self._expanded_win.show()
+
+
+    def set_volume_data(self, data, spacing=None):
         self.volume = data
+        # spacing: (sx, sy, sz) — SimpleITK convention (x=col, y=row, z=axial)
+        self.spacing = spacing if spacing is not None else getattr(self, 'spacing', (1.0, 1.0, 1.0))
         axis = 0 if "Axial" in self.orientation else 1 if "Coronal" in self.orientation else 2
         self.nav_slider.setRange(0, data.shape[axis] - 1)
         self.render_slice()
@@ -260,21 +439,33 @@ class RegistrationViewport(QWidget):
         if self.volume is None:
             return
         idx = self.nav_slider.value()
+        sx, sy, sz = self.spacing
+
         if "Axial" in self.orientation:
             slice_img = self.volume[idx]
+            scale_x, scale_y = sx, sy
         elif "Coronal" in self.orientation:
-            slice_img = self.volume[:, idx]
+            raw = self.volume[:, idx] if self.volume.ndim == 3 else self.volume[:, idx, :]
+            slice_img = np.flipud(raw)
+            scale_x, scale_y = sx, sz
         else:
-            slice_img = self.volume[:, :, idx]
-            
-        final_render = slice_img if "Axial" in self.orientation else np.flipud(slice_img)
-        self.image_view.setImage(final_render, autoLevels=(self.volume.ndim == 3), autoRange=self.is_first_load)
-        
+            slice_img = np.flipud(self.volume[:, :, idx])
+            scale_x, scale_y = sy, sz
+
+        self.image_view.setImage(
+            slice_img,
+            autoLevels=(self.volume.ndim == 3),
+            autoRange=self.is_first_load,
+            pos=[0, 0],
+            scale=[scale_x, scale_y]
+        )
+
         if self.is_first_load:
             self.plot_item.autoRange()
             self.is_first_load = False
-            
-        self.gizmo.setPos(slice_img.shape[1] / 2, slice_img.shape[0] / 2)
+
+        # Gizmo centrado en coordenadas físicas (mm)
+        self.gizmo.setPos(slice_img.shape[1] * scale_x / 2, slice_img.shape[0] * scale_y / 2)
 
 class FusoftApp(QMainWindow):
     def __init__(self):
@@ -408,8 +599,9 @@ class FusoftApp(QMainWindow):
             self.mri_array = normalize_intensity(sitk.GetArrayFromImage(self.mri_image))
             otsu = sitk.Cast(sitk.OtsuThreshold(self.mri_image, 0, 1), sitk.sitkUInt8)
             self.mri_mask = self.process_robust_mask(otsu, 5)
+            self.mri_spacing = self.mri_image.GetSpacing()  # (sx, sy, sz)
             for v in self.mri_previews.values():
-                v.load_volume(np.flip(self.mri_array, axis=1))
+                v.load_volume(np.flip(self.mri_array, axis=1), spacing=self.mri_spacing)
             self.validate_input_state()
 
     def import_ct(self):
@@ -417,9 +609,10 @@ class FusoftApp(QMainWindow):
         if path:
             self.ct_full = sitk.ReadImage(path, sitk.sitkFloat32)
             self.ct_file_path = path
+            self.ct_spacing = self.ct_full.GetSpacing()  # (sx, sy, sz)
             array = normalize_intensity(sitk.GetArrayFromImage(self.ct_full), is_ct=True)
             for v in self.ct_previews.values():
-                v.load_volume(np.flip(array, axis=1))
+                v.load_volume(np.flip(array, axis=1), spacing=self.ct_spacing)
             self.crop_axial_view.setImage(array)
             self.crop_slider.setRange(0, array.shape[0] - 1)
             self.sagittal_baseline = np.flipud(array[:, :, array.shape[2] // 2])
@@ -486,8 +679,9 @@ class FusoftApp(QMainWindow):
         else:
             output_volume = (mri_arr * 0.5 + normalize_intensity(ct_arr, is_ct=True) * 0.8)
             
+        mri_sp = getattr(self, 'mri_spacing', (1.0, 1.0, 1.0))
         for view in self.reg_viewports.values():
-            view.set_volume_data(output_volume)
+            view.set_volume_data(output_volume, spacing=mri_sp)
 
     def apply_gizmo_transform(self, orientation, dx=0, dy=0, dr=0, is_live=True):
         params = {k: v.value() for k, v in self.spin_boxes.items()}
