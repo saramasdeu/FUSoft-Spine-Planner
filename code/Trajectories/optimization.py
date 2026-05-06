@@ -1,246 +1,401 @@
 import sys
-import os
-import platform
-import subprocess
-import tkinter as tk
-from tkinter import filedialog
 import numpy as np
 import SimpleITK as sitk
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QPushButton, QFileDialog, QLabel,
+                             QTabWidget, QSlider, QGroupBox, QMessageBox, 
+                             QTableWidget, QTableWidgetItem, QHeaderView)
+from PyQt6.QtCore import Qt
+from scipy.signal import find_peaks
+
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider
-import matplotlib.gridspec as gridspec
 
-# --- FILE SELECTION FUNCTION ---
-def select_file(title):
-    system = platform.system() 
-    if system == 'Darwin': 
-        apple_script = f'''
-        try
-            set theFile to choose file with prompt "{title}"
-            POSIX path of theFile
-        on error
-            return ""
-        end try
-        '''
-        result = subprocess.run(['osascript', '-e', apple_script], capture_output=True, text=True)
-        return result.stdout.strip()
-    else:
-        root = tk.Tk()
-        root.withdraw() 
-        root.attributes('-topmost', True)
-        path = filedialog.askopenfilename(title=title, filetypes=[("Medical Images", "*.nii *.nii.gz")])
-        root.destroy()
-        return path
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("FUSpine - Advanced Multimodal Planner")
+        self.resize(1600, 950)
 
-class MultimodalTrajectoryPlanner:
-    def __init__(self, ct_path):
-        print(f"Loading CT Volume: {ct_path}")
-        self.ct_image = sitk.ReadImage(ct_path)
-        self.ct_array = sitk.GetArrayFromImage(self.ct_image) # Assumes standard [Z, Y, X] from Sitk
-        
-        self.num_slices = self.ct_array.shape[0] # Z-axis (Axial slices)
-        self.height = self.ct_array.shape[1]      # Y-axis (Anterior-Posterior)
-        self.width = self.ct_array.shape[2]       # X-axis (Left-Right)
-        
-        self.current_slice = self.num_slices // 2
-        self.target_point = None # Stored as (X, Y, Z) voxel coords
-        
-        # Heuristic Weights (TFG defined parameters)
-        self.W_DISTANCE = 1.3
-        self.W_BONE = 1.2
+        # State variables
+        self.mri_image = None
+        self.ct_image = None
+        self.mri_array = None
+        self.ct_array = None
+        self.num_slices = 0
+        self.current_slice = 0
+        self.target_point = None
+        self.top_trajectories = []
+        self.all_results = []
+        self.spacing = (1.0, 1.0, 1.0)
+
+        # Heuristic weights defined in TFG thesis
+        self.W_DIST = 1.3
+        self.W_THICK = 1.2
+        self.W_ANGLE = 2.0
         self.W_DENSITY = 1.1
-        
-        self.setup_ui()
+        self.W_CHANGES = 1.5
 
-    def setup_ui(self):
-        self.fig = plt.figure(figsize=(18, 9))
-        self.fig.canvas.manager.set_window_title("FUSpine Multimodal Treatment Planner (PoC)")
-        
-        # Define layout with GridSpec (3 columns)
-        gs = gridspec.GridSpec(1, 3, width_ratios=[1, 1, 1])
-        
-        # 1. Axial Panel (Interactive Clicks)
-        self.ax_axial = self.fig.add_subplot(gs[0])
-        self.ax_axial.set_title("1. Axial Plane (Click to set Target)")
-        self.ax_axial.axis('off')
-        
-        # 2. Sagital Panel (Visualization Only)
-        self.ax_sagittal = self.fig.add_subplot(gs[1])
-        self.ax_sagittal.set_title("2. Sagittal Plane (Transducer Placement)")
-        self.ax_sagittal.axis('off')
-        
-        # 3. Profile Panel (Top-1 Validation)
-        self.ax_profile = self.fig.add_subplot(gs[2])
-        self.ax_profile.set_title("3. Top-1 Trajectory Density Profile")
-        self.ax_profile.set_xlabel("Distance from Entry (pixels)")
-        self.ax_profile.set_ylabel("Hounsfield Units (HU)")
-        self.ax_profile.grid(True)
-        self.profile_line, = self.ax_profile.plot([], [], 'g-', linewidth=2)
-        self.ax_profile.set_ylim(-1000, 2000)
+        self.init_ui()
 
-        plt.subplots_adjust(bottom=0.2)
-        
-        # Slice Slider
-        self.ax_slider = plt.axes([0.1, 0.05, 0.3, 0.03])
-        self.slider = Slider(self.ax_slider, 'Axial Slice', 0, self.num_slices - 1, valinit=self.current_slice, valstep=1)
-        self.slider.on_changed(self.update_axial_slice)
-        
-        # Mouse interactions
-        self.fig.canvas.mpl_connect('button_press_event', self.on_click_axial)
-        self.fig.canvas.mpl_connect('scroll_event', self.mouse_scroll)
-        
-        self.redraw_axial()
-        self.ax_sagittal.imshow(np.zeros((self.num_slices, self.height)), cmap='gray', origin='lower') # Initial black sagittal
-        
-        plt.show()
+    def init_ui(self):
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        main_layout = QHBoxLayout(main_widget)
 
-    def update_axial_slice(self, val):
-        self.current_slice = int(self.slider.val)
-        # Target reset logic optional. Here we keep it but don't re-optimize until new click.
-        # self.target_point = None 
-        self.redraw_axial()
+        self.tabs = QTabWidget()
 
-    def mouse_scroll(self, event):
-        if event.button == 'up':
-            new_slice = min(self.slider.val + 1, self.num_slices - 1)
-        elif event.button == 'down':
-            new_slice = max(self.slider.val - 1, 0)
-        else:
+        # 1: Target Selection
+        self.tab1 = QWidget()
+        tab1_layout = QHBoxLayout(self.tab1)
+        left_tab1 = QVBoxLayout()
+
+        load_group = QGroupBox("1. Load Images & Preprocess")
+        load_layout = QVBoxLayout()
+        self.btn_load_mri = QPushButton("Load MRI")
+        self.btn_load_mri.setStyleSheet("background-color: #3498db; color: white; font-weight: bold; border-radius: 4px; padding: 6px;")
+        self.btn_load_mri.clicked.connect(self.load_mri)
+        self.btn_load_ct = QPushButton("Load CT")
+        self.btn_load_ct.setStyleSheet("background-color: #2980b9; color: white; font-weight: bold; border-radius: 4px; padding: 6px;")
+        self.btn_load_ct.clicked.connect(self.load_ct)
+        load_layout.addWidget(self.btn_load_mri)
+        load_layout.addWidget(self.btn_load_ct)
+        load_group.setLayout(load_layout)
+        left_tab1.addWidget(load_group)
+
+        slice_group = QGroupBox("2. Slice Navigation")
+        slice_layout = QVBoxLayout()
+        self.lbl_slice = QLabel("Slice: 0")
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setMinimum(0)
+        self.slider.setMaximum(100)
+        self.slider.valueChanged.connect(self.change_slice)
+        slice_layout.addWidget(self.lbl_slice)
+        slice_layout.addWidget(self.slider)
+        slice_group.setLayout(slice_layout)
+        left_tab1.addWidget(slice_group)
+
+        action_group = QGroupBox("3. Confirm Target")
+        action_layout = QVBoxLayout()
+        self.lbl_target = QLabel("Selected Target: None")
+        self.btn_confirm = QPushButton("Confirm & Calculate Optimal Trajectories")
+        self.btn_confirm.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
+        self.btn_confirm.clicked.connect(self.confirm_target)
+        action_layout.addWidget(self.lbl_target)
+        action_layout.addWidget(self.btn_confirm)
+        action_group.setLayout(action_layout)
+        left_tab1.addWidget(action_group)
+
+        left_tab1.addStretch()
+        tab1_layout.addLayout(left_tab1, stretch=1)
+
+        right_tab1 = QVBoxLayout()
+        self.fig_tab1 = Figure(figsize=(12, 8))
+        self.canvas_tab1 = FigureCanvas(self.fig_tab1)
+        self.ax_mri = self.fig_tab1.add_subplot(1, 2, 1)
+        self.ax_ct = self.fig_tab1.add_subplot(1, 2, 2)
+        right_tab1.addWidget(self.canvas_tab1)
+        tab1_layout.addLayout(right_tab1, stretch=3)
+
+        self.tabs.addTab(self.tab1, "Tab 1: Target Selection")
+
+        # 2: Trajectory Results
+        self.tab2 = QWidget()
+        tab2_layout = QHBoxLayout(self.tab2)
+
+        data_layout = QVBoxLayout()
+        self.results_table = QTableWidget()
+        self.results_table.setColumnCount(6)
+        self.results_table.setHorizontalHeaderLabels(["No.", "Distance (mm)", "Bone Thickness (mm)", "Angle", "Density", "Score"])
+        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.results_table.cellClicked.connect(self.on_table_click)
+        data_layout.addWidget(self.results_table)
+        
+        self.result_info = QLabel("Optimal trajectory results will appear here.\n- Select a target to begin -")
+        self.result_info.setStyleSheet("font-size: 13px; font-weight: bold; padding: 12px; background-color: #f2f4f4; border: 1px solid #bdc3c7;")
+        data_layout.addWidget(self.result_info)
+        
+        tab2_layout.addLayout(data_layout, stretch=1)
+
+        self.fig_tab2 = Figure(figsize=(14, 8))
+        self.canvas_tab2 = FigureCanvas(self.fig_tab2)
+        
+        self.ax_axial = self.fig_tab2.add_subplot(1, 2, 1)
+        self.ax_sagittal = self.fig_tab2.add_subplot(1, 2, 2)
+        
+        tab2_layout.addWidget(self.canvas_tab2, stretch=3)
+
+        self.tabs.addTab(self.tab2, "Tab 2: Trajectory Results")
+
+        # TAB 3: Optimal Trajectory & Profiles
+        self.tab3 = QWidget()
+        tab3_layout = QHBoxLayout(self.tab3)
+
+        self.fig_tab3 = Figure(figsize=(14, 8))
+        self.canvas_tab3 = FigureCanvas(self.fig_tab3)
+        self.ax_best_axial = self.fig_tab3.add_subplot(1, 2, 1)
+        self.ax_profile = self.fig_tab3.add_subplot(2, 2, 2)
+        self.ax_gradient = self.fig_tab3.add_subplot(2, 2, 4)
+        
+        tab3_layout.addWidget(self.canvas_tab3)
+        self.tabs.addTab(self.tab3, "Tab 3: Optimal Trajectory & Graphs")
+
+        main_layout.addWidget(self.tabs)
+        self.setLayout(main_layout)
+
+        self.canvas_tab1.mpl_connect('button_press_event', self.on_click_mri)
+        self.show()
+
+    def load_mri(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select MRI File", "", "NIfTI (*.nii *.nii.gz)")
+        if path:
+            self.mri_image = sitk.ReadImage(path)
+            self.mri_array = sitk.GetArrayFromImage(self.mri_image)
+            self.num_slices = self.mri_array.shape[0]
+            self.spacing = self.mri_image.GetSpacing()
+            self.slider.setMaximum(self.num_slices - 1)
+            self.slider.setValue(self.num_slices // 2)
+            self.redraw_tab1()
+
+    def load_ct(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select CT File", "", "NIfTI (*.nii *.nii.gz)")
+        if path:
+            self.ct_image = sitk.ReadImage(path)
+            self.ct_array = sitk.GetArrayFromImage(self.ct_image)
+            self.redraw_tab1()
+
+    def change_slice(self, val):
+        self.current_slice = val
+        self.lbl_slice.setText(f"Slice: {self.current_slice}")
+        self.redraw_tab1()
+
+    def redraw_tab1(self):
+        if self.mri_array is None and self.ct_array is None:
             return
-        self.slider.set_val(new_slice)
+        self.ax_mri.clear()
+        self.ax_ct.clear()
 
-    def redraw_axial(self):
-        self.ax_axial.clear()
-        self.ax_axial.imshow(self.ct_array[self.current_slice], cmap='gray', vmin=-1000, vmax=1500)
-        self.ax_axial.set_title(f"Axial Slice {self.current_slice} - Click for Target")
-        self.ax_axial.axis('off')
-        
+        if self.mri_array is not None:
+            self.ax_mri.imshow(self.mri_array[self.current_slice], cmap='gray')
+            self.ax_mri.set_title(f"MRI Slice {self.current_slice}")
+            self.ax_mri.axis('off')
+
+        if self.ct_array is not None:
+            self.ax_ct.imshow(self.ct_array[self.current_slice], cmap='gray', vmin=-1000, vmax=1500)
+            self.ax_ct.set_title(f"CT Slice {self.current_slice}")
+            self.ax_ct.axis('off')
+
         if self.target_point and self.target_point[2] == self.current_slice:
-            # Draw Target as red cross on AXIAL
-            self.ax_axial.plot(self.target_point[0], self.target_point[1], 'r+', markersize=15, markeredgewidth=2)
-            
-        self.fig.canvas.draw_idle()
+            self.ax_mri.plot(self.target_point[0], self.target_point[1], 'r+', markersize=16, markeredgewidth=3, label='Target Point')
+            self.ax_mri.legend(loc='upper right')
+            self.ax_ct.plot(self.target_point[0], self.target_point[1], 'r+', markersize=16, markeredgewidth=3, label='Target Point')
+            self.ax_ct.legend(loc='upper right')
 
-    def on_click_axial(self, event):
-        if event.inaxes != self.ax_axial: return
-        
-        # Store Target as X, Y voxel coords on the current Z slice
+        self.fig_tab1.canvas.draw_idle()
+
+    def on_click_mri(self, event):
+        if event.inaxes != self.ax_mri or self.mri_array is None:
+            return
         self.target_point = (int(event.xdata), int(event.ydata), self.current_slice)
-        print(f"\nTarget acquired at X:{self.target_point[0]}, Y:{self.target_point[1]}, Z:{self.target_point[2]}")
-        
-        self.redraw_axial()
+        self.lbl_target.setText(f"Target: X:{self.target_point[0]}, Y:{self.target_point[1]}, Slice:{self.target_point[2]}")
+        self.redraw_tab1()
+
+    def confirm_target(self):
+        if self.target_point is None or self.ct_array is None:
+            QMessageBox.warning(self, "Warning", "Please select a target point on the MRI and load the coregistered CT.")
+            return
+        self.tabs.setCurrentIndex(1)
         self.run_multimodal_optimization()
 
     def run_multimodal_optimization(self):
-        print("Running multimodal heuristic optimization...")
         x_target, y_target, z_target = self.target_point
-        slice_data = self.ct_array[z_target] # Perform 2D search within this axial slice
-        
+        slice_data = self.ct_array[z_target]
         all_results = []
-        
-        # 1. Heuristic Scan (Iterate angles)
-        angles = np.linspace(np.pi, 2 * np.pi, 60) # Arc sweep posterior spine
-        
+        spacing_xy = np.mean(self.spacing[:2])
+
+        angles = np.linspace(np.pi, 2 * np.pi, 60)
         for angle in angles:
-            max_radius = max(self.width, self.height)
+            max_radius = max(self.ct_array.shape[2], self.ct_array.shape[1])
             x_ray = np.int_(x_target + np.cos(angle) * np.arange(max_radius))
             y_ray = np.int_(y_target + np.sin(angle) * np.arange(max_radius))
-            
-            valid_idx = (x_ray >= 0) & (x_ray < self.width) & (y_ray >= 0) & (y_ray < self.height)
+
+            valid_idx = (x_ray >= 0) & (x_ray < self.ct_array.shape[2]) & (y_ray >= 0) & (y_ray < self.ct_array.shape[1])
             x_ray, y_ray = x_ray[valid_idx], y_ray[valid_idx]
-            
+
             if len(x_ray) == 0: continue
             intensities = slice_data[y_ray, x_ray]
-            
+
             air_indices = np.where(intensities < -300)[0]
             if len(air_indices) == 0: continue
-            
+
             skin_idx = air_indices[0]
-            if skin_idx < 10: continue 
-            
-            # Extract path from entry (skin) to target
+            if skin_idx < 10: continue
+
             path_intensities = intensities[:skin_idx][::-1]
             entry_x = x_ray[skin_idx]
             entry_y = y_ray[skin_idx]
-            
-            # Evaluate Pillars
-            distance = len(path_intensities)
-            bone_pixels = np.sum(path_intensities > 300)
+
+            distance = len(path_intensities) * spacing_xy
+            skull_thickness = np.sum(path_intensities > 300) * spacing_xy
+            angle_deg = np.abs(np.degrees(angle - (1.5 * np.pi)))
+            if angle_deg > 90:
+                angle_deg = 180 - angle_deg
+
             mean_density = np.mean(path_intensities)
-            
-            # Apply weighted cost function (lower score is better)
-            score = (self.W_DISTANCE * distance) + (self.W_BONE * bone_pixels) + (self.W_DENSITY * mean_density)
-            
+            derivative = np.abs(np.diff(path_intensities))
+            density_changes = np.sum(derivative > 50)
+
             all_results.append({
-                'score': score,
                 'entry_point': (entry_x, entry_y),
-                'profile': path_intensities
+                'distance': distance,
+                'skull_thickness': skull_thickness,
+                'angle': angle_deg,
+                'mean_density': mean_density,
+                'density_changes': density_changes,
+                'profile': path_intensities,
+                'score': 0
             })
 
-        # Sort results by score (ascending)
+        if not all_results:
+            return
+
+        distances = np.array([r['distance'] for r in all_results])
+        thicknesses = np.array([r['skull_thickness'] for r in all_results])
+        angles_arr = np.array([r['angle'] for r in all_results])
+        mean_densities = np.array([r['mean_density'] for r in all_results])
+        density_changes = np.array([r['density_changes'] for r in all_results])
+
+        def normalize(arr):
+            m = np.max(arr)
+            return (arr / m) * 10 if m > 0 else arr
+
+        dist_norm = normalize(distances)
+        thick_norm = normalize(thicknesses)
+        density_norm = normalize(mean_densities)
+        changes_norm = normalize(density_changes)
+
+        angle_norm = (angles_arr**4 / 30000) + 1
+        sum_weights = self.W_DIST + self.W_THICK + self.W_ANGLE + self.W_DENSITY + self.W_CHANGES
+
+        for i in range(len(all_results)):
+            score = (
+                (self.W_DIST * dist_norm[i]) +
+                (self.W_THICK * thick_norm[i]) +
+                (self.W_ANGLE * angle_norm[i]) +
+                (self.W_DENSITY * density_norm[i]) +
+                (self.W_CHANGES * changes_norm[i])
+            ) / sum_weights
+            all_results[i]['score'] = score
+
         all_results.sort(key=lambda x: x['score'])
+        self.top_trajectories = all_results[:10]
+        self.all_results = all_results
 
-        # --- FASE A: VISUALITZACIÓ AXIAL (Top-10 i Transductor) ---
-        print(f"Optimization complete. Drawing Top-10 trajectories on Axial plane.")
-        top_1 = all_results[0]
-        
-        # Draw Top 10 paths in faint red/orange, but use faint green for Top-1 background
-        for i in range(min(10, len(all_results))):
-            path = all_results[i]
-            entry_x, entry_y = path['entry_point']
-            alpha_val = 1.0 - (i * 0.08) # Fade faint paths
-            
-            color = 'g-' if i == 0 else 'r-' # Highlight best path line faintly
-            self.ax_axial.plot([entry_x, x_target], [entry_y, y_target], color, alpha=alpha_val, linewidth=0.5)
+        self.results_table.setRowCount(10)
+        for idx in range(10):
+            res = self.top_trajectories[idx]
+            self.results_table.setItem(idx, 0, QTableWidgetItem(str(idx + 1)))
+            self.results_table.setItem(idx, 1, QTableWidgetItem(f"{res['distance']:.1f}"))
+            self.results_table.setItem(idx, 2, QTableWidgetItem(f"{res['skull_thickness']:.1f}"))
+            self.results_table.setItem(idx, 3, QTableWidgetItem(f"{res['angle']:.1f}°"))
+            self.results_table.setItem(idx, 4, QTableWidgetItem(f"{res['mean_density']:.1f}"))
+            self.results_table.setItem(idx, 5, QTableWidgetItem(f"{res['score']:.4f}"))
 
-        # Draw THE Transductor for Top-1 (Large green circle)
-        top_1_entry = top_1['entry_point']
-        self.ax_axial.plot(top_1_entry[0], top_1_entry[1], 'go', markersize=10, label="Optimal Transducer Placement")
-        
-        # --- FASE B: VISUALITZACIÓ SAGITAL (Projecció i Col·locació) ---
-        print(f"Displaying Sagittal projection through X-coord {x_target}.")
+        self.plot_trajectory_data(self.top_trajectories[0])
+
+    def on_table_click(self, row, column):
+        if row < len(self.top_trajectories):
+            self.plot_trajectory_data(self.top_trajectories[row])
+
+    def plot_trajectory_data(self, trajectory):
+        x_target, y_target, z_target = self.target_point
+
+        # 1. Axial View Plot
+        self.ax_axial.clear()
+        self.ax_axial.imshow(self.ct_array[z_target], cmap='gray', vmin=-1000, vmax=1500)
+        self.ax_axial.set_title("Axial View - Selected Trajectory", fontsize=13, pad=12)
+        self.ax_axial.axis('off')
+
+        self.ax_axial.plot(x_target, y_target, 'r+', markersize=18, markeredgewidth=3, label="Target Point")
+
+        ex, ey = trajectory['entry_point']
+        self.ax_axial.plot([ex, x_target], [ey, y_target], color='#27ae60', linewidth=3.5, label="Trajectory")
+        self.ax_axial.plot(ex, ey, 'go', markersize=12, label="Optimal Transducer")
+
+        self.ax_axial.legend(loc="upper right", fontsize=9)
+
+        angle = trajectory['angle']
+        color_angle = "orange" if angle > 25.0 else "green"
+        self.ax_axial.text(ex - 12, ey + 15, f"Angle: {angle:.1f}°", color=color_angle, fontweight='bold', fontsize=10,
+                            bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', boxstyle='round'))
+
+        self.result_info.setText(
+            f"Trajectory Results (Score: {trajectory['score']:.4f}):\n\n"
+            f"· Distance: {trajectory['distance']:.1f} mm\n"
+            f"· Bone thickness: {trajectory['skull_thickness']:.1f} mm\n"
+            f"· Incidence angle: {trajectory['angle']:.1f}°\n"
+            f"· Mean density: {trajectory['mean_density']:.1f} HU\n"
+            f"· Density changes: {trajectory['density_changes']}"
+        )
+
+        # 2. Sagittal View Plot
         self.ax_sagittal.clear()
-        
-        # Sitk Array [Z, Y, X]. Sagittal cut fixes X. Need [Z, Y]. Origin lower so Z is Up.
         sagittal_slice = self.ct_array[:, :, x_target]
-        
-        self.ax_sagittal.imshow(sagittal_slice, cmap='gray', origin='lower', aspect=1.0) # aspect 1.0 ensures vertical scale is correct
-        self.ax_sagittal.set_title(f"Sagittal Plane (Cut at X:{x_target})")
-        self.ax_sagittal.set_xlabel("Anterior-Posterior (Y)")
-        self.ax_sagittal.set_ylabel("Superior-Inferior (Z)")
+        self.ax_sagittal.imshow(sagittal_slice, cmap='gray', origin='lower', aspect=1.0)
+        self.ax_sagittal.set_title("Sagittal View (Beam Profile)", fontsize=13, pad=12)
         self.ax_sagittal.axis('off')
-        
-        # Project the target onto Sagittal (Y, Z) axes
-        self.ax_sagittal.plot(y_target, z_target, 'r+', markersize=15, markeredgewidth=2)
-        
-        # Project the optimal Transducer (skin point) onto Sagittal (Y, Z) axes
-        # Important clinical limitation: Sound is assumed to come from this vertical level (Z)
-        top_1_entry_y = top_1_entry[1]
-        self.ax_sagittal.plot(top_1_entry_y, z_target, 'go', markersize=10) # Draws transductor at skin
 
-        # Draw clinical trajectory on sagittal
-        self.ax_sagittal.plot([top_1_entry_y, y_target], [z_target, z_target], 'g-', linewidth=2)
-        
-        # --- FASE C: ACTUALITZACIÓ DEL PERFIL DE DENSITAT (Top-1) ---
-        best_profile = top_1['profile']
-        self.profile_line.set_data(range(len(best_profile)), best_profile)
-        self.ax_profile.set_xlim(0, len(best_profile))
-        self.ax_profile.set_title(f"Top-1 Density Profile (Score: {top_1['score']:.0f})")
-        
-        self.fig.canvas.draw_idle()
+        self.ax_sagittal.plot(y_target, z_target, 'r+', markersize=16, markeredgewidth=2)
+        self.ax_sagittal.plot(ey, z_target, 'go', markersize=10, label="Transducer")
+        self.ax_sagittal.plot([ey, y_target], [z_target, z_target], 'g-', linewidth=2.5)
+        self.ax_sagittal.legend(loc="upper right", fontsize=9)
 
-if __name__ == "__main__":
-    print("\n" + "="*60)
-    print("FUSPINE CLINICAL TRAJECTORY PLANNER")
-    print("="*60)
+        self.fig_tab2.canvas.draw_idle()
 
-    # Replaced hardcoded path with dynamic selection
-    ct_file_path = select_file("Select the CT or Pseudo-CT file (.nii or .nii.gz)")
-    
-    if not ct_file_path or ct_file_path == "":
-        sys.exit("Process canceled. A CT file is required.")
+        # 3. Tab 3 Graphs Plot
+        self.ax_best_axial.clear()
+        self.ax_best_axial.imshow(self.ct_array[z_target], cmap='gray', vmin=-1000, vmax=1500)
+        self.ax_best_axial.set_title("Optimal Trajectory", fontsize=12, pad=10)
+        self.ax_best_axial.axis('off')
         
-    try:
-        app = MultimodalTrajectoryPlanner(ct_file_path)
-    except Exception as e:
-        print(f"Failed to load image. Ensure Sitk NIfTI dimensions are [Z,Y,X]: {e}")
+        self.ax_best_axial.plot(x_target, y_target, 'r+', markersize=16, markeredgewidth=2, label="Target")
+        self.ax_best_axial.plot([ex, x_target], [ey, y_target], color='#27ae60', linewidth=3, label="Trajectory")
+        self.ax_best_axial.plot(ex, ey, 'go', markersize=10, label="Transducer")
+        self.ax_best_axial.legend(loc="upper right", fontsize=8)
+
+        best_profile = trajectory['profile']
+        x_axis = np.arange(len(best_profile))
+        
+        self.ax_profile.clear()
+        self.ax_profile.fill_between(x_axis, -200, 2000, where=(best_profile < -150), color='lightblue', alpha=0.15)
+        self.ax_profile.fill_between(x_axis, -200, 2000, where=(best_profile >= -150) & (best_profile <= 300), color='gray', alpha=0.15)
+        self.ax_profile.fill_between(x_axis, -200, 2000, where=(best_profile > 300), color='salmon', alpha=0.2)
+        
+        self.ax_profile.plot(x_axis, best_profile, '#27ae60', linewidth=2, label='Density')
+        
+        peaks, _ = find_peaks(best_profile, height=400, distance=3)
+        if len(peaks) > 0:
+            self.ax_profile.plot(x_axis[peaks], best_profile[peaks], "r^", markersize=9, label="Density Peaks")
+
+        self.ax_profile.set_title("Density Profile Along Trajectory", fontsize=10)
+        self.ax_profile.set_ylabel("Intensity (HU)", fontsize=8)
+        self.ax_profile.set_ylim(-200, 2000)
+        self.ax_profile.grid(True)
+        self.ax_profile.legend(loc='upper right', fontsize=7)
+
+        self.ax_gradient.clear()
+        gradient = np.diff(best_profile)
+        self.ax_gradient.plot(x_axis[:-1], gradient, color='#e67e22', linewidth=1.5, label='Gradient')
+        self.ax_gradient.axhline(y=0, color='black', linestyle='--', linewidth=1)
+        self.ax_gradient.set_title("Density Change Rate", fontsize=10)
+        self.ax_gradient.set_xlabel("Entry Distance", fontsize=8)
+        self.ax_gradient.grid(True)
+        
+        self.fig_tab3.canvas.draw_idle()
+
+
+if __name__ == '__main__':
+    qt_app = QApplication(sys.argv)
+    window = MainWindow()
+    sys.exit(qt_app.exec())

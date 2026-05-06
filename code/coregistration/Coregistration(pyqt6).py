@@ -155,23 +155,19 @@ class RegistrationGizmo(pg.GraphicsObject):
         self.last_mouse_position = event.scenePos()
         
         spacing = self.viewport.main_window.mri_image.GetSpacing()
-        # spacing = (sx, sy, sz) — SimpleITK: x=col, y=row, z=axial
         sx, sy, sz = spacing[0], spacing[1], spacing[2]
         ori = self.viewport.orientation
 
         if self.active_handle in ['tx', 'ty']:
-            # En la vista Coronal el eje vertical es Z y la imagen está flipada (flipud),
-            # así que el signo de dy se invierte respecto al movimiento del ratón.
-            # En Axial y Sagittal el eje vertical es Y/Z sin flip extra en el gizmo.
             if "Coronal" in ori:
-                # cols → X (sx), rows → Z (sz), flipud → dy_real = +delta.y (no negativo)
                 gizmo_dx = delta.x() * sx
-                gizmo_dy = delta.y() * sz   # signo positivo porque flipud invierte el eje
+                gizmo_dy = delta.y() * sz   
             elif "Axial" in ori:
                 gizmo_dx = delta.x() * sx
-                gizmo_dy = -delta.y() * sy
+                # INVERSIÓ AQUÍ: Afegim el signe negatiu (-) perquè el moviment 
+                # del ratolí coincideixi amb la translació física ty
+                gizmo_dy = -delta.y() * sy 
             else:  # Sagittal
-                # cols → Y (sy), rows → Z (sz), flipud → dy_real = +delta.y
                 gizmo_dx = delta.x() * sy
                 gizmo_dy = delta.y() * sz
 
@@ -442,7 +438,7 @@ class RegistrationViewport(QWidget):
         sx, sy, sz = self.spacing
 
         if "Axial" in self.orientation:
-            slice_img = self.volume[idx]
+            slice_img = np.flipud(self.volume[idx])
             scale_x, scale_y = sx, sy
         elif "Coronal" in self.orientation:
             raw = self.volume[:, idx] if self.volume.ndim == 3 else self.volume[:, idx, :]
