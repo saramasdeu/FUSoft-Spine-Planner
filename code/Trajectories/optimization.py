@@ -30,10 +30,10 @@ class MainWindow(QMainWindow):
         self.all_results = []
         self.spacing = (1.0, 1.0, 1.0)
 
-        # Heuristic weights defined in TFG thesis
+        # Heuristic weights
         self.W_DIST = 1.3
-        self.W_THICK = 1.2
-        self.W_ANGLE = 2.0
+        self.W_THICK = 2.8 
+        self.W_ANGLE = 1.5
         self.W_DENSITY = 1.1
         self.W_CHANGES = 1.5
 
@@ -46,12 +46,13 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
 
-        # 1: Target Selection
+
+        # SCREEN 1: Target Selection
         self.tab1 = QWidget()
         tab1_layout = QHBoxLayout(self.tab1)
         left_tab1 = QVBoxLayout()
 
-        load_group = QGroupBox("1. Load Images & Preprocess")
+        load_group = QGroupBox("1. Load & Preprocessing")
         load_layout = QVBoxLayout()
         self.btn_load_mri = QPushButton("Load MRI")
         self.btn_load_mri.setStyleSheet("background-color: #3498db; color: white; font-weight: bold; border-radius: 4px; padding: 6px;")
@@ -64,7 +65,7 @@ class MainWindow(QMainWindow):
         load_group.setLayout(load_layout)
         left_tab1.addWidget(load_group)
 
-        slice_group = QGroupBox("2. Slice Navigation")
+        slice_group = QGroupBox("2. Slice Viewer")
         slice_layout = QVBoxLayout()
         self.lbl_slice = QLabel("Slice: 0")
         self.slider = QSlider(Qt.Orientation.Horizontal)
@@ -79,7 +80,7 @@ class MainWindow(QMainWindow):
         action_group = QGroupBox("3. Confirm Target")
         action_layout = QVBoxLayout()
         self.lbl_target = QLabel("Selected Target: None")
-        self.btn_confirm = QPushButton("Confirm & Calculate Optimal Trajectories")
+        self.btn_confirm = QPushButton("Confirm & Calculate Phase 2")
         self.btn_confirm.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold; padding: 8px; border-radius: 4px;")
         self.btn_confirm.clicked.connect(self.confirm_target)
         action_layout.addWidget(self.lbl_target)
@@ -98,9 +99,9 @@ class MainWindow(QMainWindow):
         right_tab1.addWidget(self.canvas_tab1)
         tab1_layout.addLayout(right_tab1, stretch=3)
 
-        self.tabs.addTab(self.tab1, "Tab 1: Target Selection")
+        self.tabs.addTab(self.tab1, "Screen 1: Target Selection")
 
-        # 2: Trajectory Results
+        # SCREEN 2: Top 10 Trajectory Results
         self.tab2 = QWidget()
         tab2_layout = QHBoxLayout(self.tab2)
 
@@ -126,9 +127,9 @@ class MainWindow(QMainWindow):
         
         tab2_layout.addWidget(self.canvas_tab2, stretch=3)
 
-        self.tabs.addTab(self.tab2, "Tab 2: Trajectory Results")
+        self.tabs.addTab(self.tab2, "Screen 2: Top 10 Trajectories")
 
-        # TAB 3: Optimal Trajectory & Profiles
+        # SCREEN 3: Optimal Trajectory & Density Profile
         self.tab3 = QWidget()
         tab3_layout = QHBoxLayout(self.tab3)
 
@@ -139,7 +140,7 @@ class MainWindow(QMainWindow):
         self.ax_gradient = self.fig_tab3.add_subplot(2, 2, 4)
         
         tab3_layout.addWidget(self.canvas_tab3)
-        self.tabs.addTab(self.tab3, "Tab 3: Optimal Trajectory & Graphs")
+        self.tabs.addTab(self.tab3, "Screen 3: Optimal Trajectory & Graphs")
 
         main_layout.addWidget(self.tabs)
         self.setLayout(main_layout)
@@ -302,58 +303,54 @@ class MainWindow(QMainWindow):
             self.results_table.setItem(idx, 4, QTableWidgetItem(f"{res['mean_density']:.1f}"))
             self.results_table.setItem(idx, 5, QTableWidgetItem(f"{res['score']:.4f}"))
 
-        self.plot_trajectory_data(self.top_trajectories[0])
+        self.plot_trajectories(self.top_trajectories[0])
 
     def on_table_click(self, row, column):
         if row < len(self.top_trajectories):
-            self.plot_trajectory_data(self.top_trajectories[row])
+            self.plot_trajectories(self.top_trajectories[row])
 
-    def plot_trajectory_data(self, trajectory):
+    def plot_trajectories(self, trajectory):
         x_target, y_target, z_target = self.target_point
 
-        # 1. Axial View Plot
+        # SCREEN 2: Trajectory Results View
         self.ax_axial.clear()
         self.ax_axial.imshow(self.ct_array[z_target], cmap='gray', vmin=-1000, vmax=1500)
-        self.ax_axial.set_title("Axial View - Selected Trajectory", fontsize=13, pad=12)
+        self.ax_axial.set_title("Axial View - Top 10 Trajectories", fontsize=12, pad=10)
         self.ax_axial.axis('off')
 
-        self.ax_axial.plot(x_target, y_target, 'r+', markersize=18, markeredgewidth=3, label="Target Point")
+        self.ax_axial.plot(x_target, y_target, 'r+', markersize=16, markeredgewidth=2, label="dACC Target")
+
+        for i in range(min(10, len(self.top_trajectories))):
+            path = self.top_trajectories[i]
+            ex, ey = path['entry_point']
+            c = '#2ecc71' if i == 0 else '#e74c3c'
+            self.ax_axial.plot([ex, x_target], [ey, y_target], color=c, linewidth=1.5)
 
         ex, ey = trajectory['entry_point']
-        self.ax_axial.plot([ex, x_target], [ey, y_target], color='#27ae60', linewidth=3.5, label="Trajectory")
-        self.ax_axial.plot(ex, ey, 'go', markersize=12, label="Optimal Transducer")
-
-        self.ax_axial.legend(loc="upper right", fontsize=9)
-
-        angle = trajectory['angle']
-        color_angle = "orange" if angle > 25.0 else "green"
-        self.ax_axial.text(ex - 12, ey + 15, f"Angle: {angle:.1f}°", color=color_angle, fontweight='bold', fontsize=10,
-                            bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', boxstyle='round'))
+        self.ax_axial.plot(ex, ey, 'go', markersize=9, label="Optimal Transducer")
+        self.ax_axial.legend(loc="upper right", fontsize=8)
 
         self.result_info.setText(
-            f"Trajectory Results (Score: {trajectory['score']:.4f}):\n\n"
+            f"Results:\n\n"
+            f"· Transducer Position: (X:{ex:.0f}, Y:{ey:.0f})\n"
             f"· Distance: {trajectory['distance']:.1f} mm\n"
-            f"· Bone thickness: {trajectory['skull_thickness']:.1f} mm\n"
-            f"· Incidence angle: {trajectory['angle']:.1f}°\n"
-            f"· Mean density: {trajectory['mean_density']:.1f} HU\n"
-            f"· Density changes: {trajectory['density_changes']}"
+            f"· Bone Thickness: {trajectory['skull_thickness']:.1f} mm\n"
+            f"· Angle: {trajectory['angle']:.1f}°\n"
+            f"· Score: {trajectory['score']:.4f}"
         )
 
-        # 2. Sagittal View Plot
         self.ax_sagittal.clear()
         sagittal_slice = self.ct_array[:, :, x_target]
         self.ax_sagittal.imshow(sagittal_slice, cmap='gray', origin='lower', aspect=1.0)
-        self.ax_sagittal.set_title("Sagittal View (Beam Profile)", fontsize=13, pad=12)
+        self.ax_sagittal.set_title("Sagittal View (Profile)", fontsize=12, pad=10)
         self.ax_sagittal.axis('off')
 
-        self.ax_sagittal.plot(y_target, z_target, 'r+', markersize=16, markeredgewidth=2)
-        self.ax_sagittal.plot(ey, z_target, 'go', markersize=10, label="Transducer")
-        self.ax_sagittal.plot([ey, y_target], [z_target, z_target], 'g-', linewidth=2.5)
-        self.ax_sagittal.legend(loc="upper right", fontsize=9)
+        self.ax_sagittal.plot(y_target, z_target, 'r+', markersize=12, markeredgewidth=2)
+        self.ax_sagittal.plot(ey, z_target, 'go', markersize=8, label="Transducer")
+        self.ax_sagittal.plot([ey, y_target], [z_target, z_target], 'g-', linewidth=2)
+        self.ax_sagittal.legend(loc="upper right", fontsize=8)
 
-        self.fig_tab2.canvas.draw_idle()
-
-        # 3. Tab 3 Graphs Plot
+        # SCREEN 3: Optimal Trajectory & Density Profile
         self.ax_best_axial.clear()
         self.ax_best_axial.imshow(self.ct_array[z_target], cmap='gray', vmin=-1000, vmax=1500)
         self.ax_best_axial.set_title("Optimal Trajectory", fontsize=12, pad=10)
@@ -378,7 +375,7 @@ class MainWindow(QMainWindow):
         if len(peaks) > 0:
             self.ax_profile.plot(x_axis[peaks], best_profile[peaks], "r^", markersize=9, label="Density Peaks")
 
-        self.ax_profile.set_title("Density Profile Along Trajectory", fontsize=10)
+        self.ax_profile.set_title("Trajectory Density Profile", fontsize=10)
         self.ax_profile.set_ylabel("Intensity (HU)", fontsize=8)
         self.ax_profile.set_ylim(-200, 2000)
         self.ax_profile.grid(True)
@@ -391,7 +388,8 @@ class MainWindow(QMainWindow):
         self.ax_gradient.set_title("Density Change Rate", fontsize=10)
         self.ax_gradient.set_xlabel("Entry Distance", fontsize=8)
         self.ax_gradient.grid(True)
-        
+
+        self.fig_tab2.canvas.draw_idle()
         self.fig_tab3.canvas.draw_idle()
 
 

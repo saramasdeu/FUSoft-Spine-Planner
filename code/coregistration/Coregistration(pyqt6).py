@@ -42,7 +42,6 @@ class AnalysisResultWindow(QMainWindow):
         ct_reg_data = normalize_intensity(sitk.GetArrayFromImage(ct_reg_img), is_ct=True)
         ct_mask_data = sitk.GetArrayFromImage(ct_mask)
         
-        # Pink Bone
         anatomy_overlay = np.zeros((*mri_data.shape, 3), dtype=np.float32)
         bone_mask = (sitk.GetArrayFromImage(ct_reg_img) > 200).astype(np.float32)
         for i in range(3):
@@ -50,10 +49,9 @@ class AnalysisResultWindow(QMainWindow):
         anatomy_overlay[..., 0] = np.clip(anatomy_overlay[..., 0] + bone_mask * 0.7, 0, 1)
         anatomy_overlay[..., 2] = np.clip(anatomy_overlay[..., 2] + bone_mask * 0.7, 0, 1)
         
-        # Match (Yellow)
         boundary_match = np.zeros_like(anatomy_overlay)
-        boundary_match[..., 0] = ct_mask_data  # Red channel: CT
-        boundary_match[..., 1] = mri_mask_data # Green channel: MRI
+        boundary_match[..., 0] = ct_mask_data
+        boundary_match[..., 1] = mri_mask_data
         
         visual_outputs = [
             (mri_data, "1. Original MRI"),
@@ -161,12 +159,10 @@ class RegistrationGizmo(pg.GraphicsObject):
         if self.active_handle in ['tx', 'ty']:
             if "Coronal" in ori:
                 gizmo_dx = delta.x() * sx
-                gizmo_dy = delta.y() * sz   
+                gizmo_dy = delta.y() * sz
             elif "Axial" in ori:
                 gizmo_dx = delta.x() * sx
-                # INVERSIÓ AQUÍ: Afegim el signe negatiu (-) perquè el moviment 
-                # del ratolí coincideixi amb la translació física ty
-                gizmo_dy = -delta.y() * sy 
+                gizmo_dy = -delta.y() * sy
             else:  # Sagittal
                 gizmo_dx = delta.x() * sy
                 gizmo_dy = delta.y() * sz
@@ -217,14 +213,12 @@ class ExpandedViewWindow(QMainWindow):
         self.image_view.getView().setAspectLocked(True)
         layout.addWidget(self.image_view, stretch=10)
 
-        # Slider sincronizado con el viewer original
         self.nav_slider = QSlider(Qt.Orientation.Horizontal)
         layout.addWidget(self.nav_slider)
 
         self._sync_from_source()
         self.nav_slider.valueChanged.connect(self._on_slider)
 
-        # Sincronizar slider original → ampliado
         src_slider = getattr(source_viewer, 'slice_slider',
                     getattr(source_viewer, 'nav_slider', None))
         if src_slider:
@@ -245,13 +239,11 @@ class ExpandedViewWindow(QMainWindow):
         self._render(src.value())
 
     def _on_slider(self, idx):
-        # Propagar al slider original
         src = self._get_source_slider()
         if src:
             src.blockSignals(True)
             src.setValue(idx)
             src.blockSignals(False)
-            # Forzar render en source también
             if hasattr(self.source_viewer, 'update_slice'):
                 self.source_viewer.update_slice()
             elif hasattr(self.source_viewer, 'render_slice'):
@@ -260,7 +252,6 @@ class ExpandedViewWindow(QMainWindow):
 
     def _render(self, idx):
         sv = self.source_viewer
-        # VolumeSliceViewer
         if hasattr(sv, 'volume_data') and sv.volume_data is not None:
             data = sv.volume_data
             spacing = getattr(sv, 'spacing', (1.0, 1.0, 1.0))
@@ -277,14 +268,13 @@ class ExpandedViewWindow(QMainWindow):
                 scx, scy = sy, sz
             self.image_view.setImage(slice_img, autoLevels=True,
                                      pos=[0, 0], scale=[scx, scy])
-        # RegistrationViewport
         elif hasattr(sv, 'volume') and sv.volume is not None:
             data = sv.volume
             spacing = getattr(sv, 'spacing', (1.0, 1.0, 1.0))
             sx, sy, sz = spacing
             ori = sv.orientation
             if "Axial" in ori:
-                slice_img = data[idx]
+                slice_img = np.flipud(data[idx])
                 scx, scy = sx, sy
             elif "Coronal" in ori:
                 raw = data[:, idx] if data.ndim == 3 else data[:, idx, :]
@@ -317,7 +307,6 @@ class VolumeSliceViewer(QWidget):
         self.image_view.ui.histogram.hide()
         self.slice_slider = QSlider(Qt.Orientation.Horizontal)
         
-        # Header row: title + expand button
         header = QHBoxLayout()
         header.addWidget(self.title_label)
         btn_expand = QPushButton("⛶")
@@ -340,7 +329,6 @@ class VolumeSliceViewer(QWidget):
 
     def load_volume(self, data, spacing=None):
         self.volume_data = data
-        # spacing: (sx, sy, sz) en mm — SimpleITK convention (x=col, y=row, z=axial)
         self.spacing = spacing if spacing is not None else (1.0, 1.0, 1.0)
         axis_map = {'Axial': 0, 'Coronal': 1, 'Sagittal': 2}
         max_slices = data.shape[axis_map.get(self.orientation.split()[-1], 0)]
@@ -353,22 +341,16 @@ class VolumeSliceViewer(QWidget):
         if self.volume_data is None:
             return
         idx = self.slice_slider.value()
-        sx, sy, sz = self.spacing  # x=col, y=row, z=axial
+        sx, sy, sz = self.spacing
 
         if "Axial" in self.orientation:
             slice_img = self.volume_data[idx]
-            # Axial: cols→x, rows→y → aspect = sx/sy
-            h, w = slice_img.shape[:2]
             scale_x, scale_y = sx, sy
         elif "Coronal" in self.orientation:
             slice_img = np.flipud(self.volume_data[:, idx, :])
-            # Coronal: cols→x, rows→z → aspect = sx/sz
-            h, w = slice_img.shape[:2]
             scale_x, scale_y = sx, sz
         else:
             slice_img = np.flipud(self.volume_data[:, :, idx])
-            # Sagittal: cols→y, rows→z → aspect = sy/sz
-            h, w = slice_img.shape[:2]
             scale_x, scale_y = sy, sz
 
         self.image_view.setImage(
@@ -378,6 +360,7 @@ class VolumeSliceViewer(QWidget):
         )
         self.image_view.getView().setAspectLocked(True)
 
+
 class RegistrationViewport(QWidget):
     def __init__(self, label, main_window):
         super().__init__()
@@ -386,9 +369,18 @@ class RegistrationViewport(QWidget):
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(2, 2, 2, 2)
-        # Header row: title + expand button
+
         hdr = QHBoxLayout()
         hdr.addWidget(QLabel(f"<b>{label}</b>"))
+
+        # Botón reset zoom
+        btn_reset = QPushButton("⟳")
+        btn_reset.setFixedSize(26, 26)
+        btn_reset.setToolTip("Reset zoom")
+        btn_reset.setStyleSheet("font-size:14px; padding:0;")
+        btn_reset.clicked.connect(self._reset_zoom)
+        hdr.addWidget(btn_reset)
+
         btn_exp = QPushButton("⛶")
         btn_exp.setFixedSize(26, 26)
         btn_exp.setToolTip("Ampliar vista")
@@ -403,9 +395,10 @@ class RegistrationViewport(QWidget):
         self.image_view.ui.menuBtn.hide()
         
         self.plot_item = self.image_view.getView()
-        self.plot_item.setMouseEnabled(x=False, y=False)
         self.plot_item.setAspectLocked(True)
-        
+        # Zoom con rueda habilitado; pan con botón derecho (por defecto en PlotItem)
+        self.plot_item.setMouseEnabled(x=True, y=True)
+
         self.gizmo = RegistrationGizmo(self)
         self.image_view.addItem(self.gizmo)
         
@@ -422,10 +415,11 @@ class RegistrationViewport(QWidget):
         self._expanded_win = ExpandedViewWindow(self)
         self._expanded_win.show()
 
+    def _reset_zoom(self):
+        self.plot_item.autoRange()
 
     def set_volume_data(self, data, spacing=None):
         self.volume = data
-        # spacing: (sx, sy, sz) — SimpleITK convention (x=col, y=row, z=axial)
         self.spacing = spacing if spacing is not None else getattr(self, 'spacing', (1.0, 1.0, 1.0))
         axis = 0 if "Axial" in self.orientation else 1 if "Coronal" in self.orientation else 2
         self.nav_slider.setRange(0, data.shape[axis] - 1)
@@ -448,6 +442,10 @@ class RegistrationViewport(QWidget):
             slice_img = np.flipud(self.volume[:, :, idx])
             scale_x, scale_y = sy, sz
 
+        # Guardar rango actual para no perder el zoom al cambiar slice
+        if not self.is_first_load:
+            saved_range = self.plot_item.viewRange()
+
         self.image_view.setImage(
             slice_img,
             autoLevels=(self.volume.ndim == 3),
@@ -459,9 +457,14 @@ class RegistrationViewport(QWidget):
         if self.is_first_load:
             self.plot_item.autoRange()
             self.is_first_load = False
+        else:
+            # Restaurar el zoom/pan del usuario
+            self.plot_item.setXRange(saved_range[0][0], saved_range[0][1], padding=0)
+            self.plot_item.setYRange(saved_range[1][0], saved_range[1][1], padding=0)
 
         # Gizmo centrado en coordenadas físicas (mm)
         self.gizmo.setPos(slice_img.shape[1] * scale_x / 2, slice_img.shape[0] * scale_y / 2)
+
 
 class FusoftApp(QMainWindow):
     def __init__(self):
@@ -533,7 +536,7 @@ class FusoftApp(QMainWindow):
             self.reg_main_layout.addWidget(v, stretch=3)
             
         control_panel = QScrollArea()
-        control_panel.setFixedWidth(240)
+        control_panel.setFixedWidth(260)
         control_panel.setWidgetResizable(True)
         panel_widget = QWidget()
         panel_layout = QVBoxLayout(panel_widget)
@@ -550,7 +553,14 @@ class FusoftApp(QMainWindow):
         self.chk_overlay.stateChanged.connect(lambda: self.refresh_registration_view(is_live=False))
         panel_layout.addWidget(self.chk_overlay)
         panel_layout.addWidget(QLabel("<hr>"))
-        
+
+        # ── Info spacing ──────────────────────────────────────────────────────
+        self.lbl_spacing = QLabel("Spacing:\nMRI: —\nCT:  —")
+        self.lbl_spacing.setStyleSheet("font-size:11px; color:#aaa; background:#1a252f; padding:4px;")
+        self.lbl_spacing.setWordWrap(True)
+        panel_layout.addWidget(self.lbl_spacing)
+        panel_layout.addWidget(QLabel("<hr>"))
+
         self.spin_boxes = {}
         transform_params = [('tx', 'Trans X', 250), ('ty', 'Trans Y', 250), ('tz', 'Trans Z', 250),
                             ('rx', 'Rot X', 180), ('ry', 'Rot Y', 180), ('rz', 'Rot Z', 180)]
@@ -595,7 +605,7 @@ class FusoftApp(QMainWindow):
             self.mri_array = normalize_intensity(sitk.GetArrayFromImage(self.mri_image))
             otsu = sitk.Cast(sitk.OtsuThreshold(self.mri_image, 0, 1), sitk.sitkUInt8)
             self.mri_mask = self.process_robust_mask(otsu, 5)
-            self.mri_spacing = self.mri_image.GetSpacing()  # (sx, sy, sz)
+            self.mri_spacing = self.mri_image.GetSpacing()
             for v in self.mri_previews.values():
                 v.load_volume(np.flip(self.mri_array, axis=1), spacing=self.mri_spacing)
             self.validate_input_state()
@@ -605,13 +615,15 @@ class FusoftApp(QMainWindow):
         if path:
             self.ct_full = sitk.ReadImage(path, sitk.sitkFloat32)
             self.ct_file_path = path
-            self.ct_spacing = self.ct_full.GetSpacing()  # (sx, sy, sz)
+            self.ct_spacing = self.ct_full.GetSpacing()
             array = normalize_intensity(sitk.GetArrayFromImage(self.ct_full), is_ct=True)
             for v in self.ct_previews.values():
                 v.load_volume(np.flip(array, axis=1), spacing=self.ct_spacing)
             self.crop_axial_view.setImage(array)
             self.crop_slider.setRange(0, array.shape[0] - 1)
             self.sagittal_baseline = np.flipud(array[:, :, array.shape[2] // 2])
+            self.crop_slider.setValue(array.shape[0] // 2)
+            self.update_crop_preview()
             self.validate_input_state()
 
     def validate_input_state(self):
@@ -647,10 +659,11 @@ class FusoftApp(QMainWindow):
         transform.SetCenter(self.initial_transform.GetCenter())
         transform.SetRotation(np.radians(params['rx']), np.radians(params['ry']), np.radians(params['rz']))
         transform.SetTranslation((params['tx'], params['ty'], params['tz']))
-        
+
+        composite = sitk.CompositeTransform([self.initial_transform, transform])
         resampled_ct = sitk.Resample(
-            self.ct_cropped, self.mri_image, 
-            sitk.CompositeTransform([self.initial_transform, transform]), 
+            self.ct_cropped, self.mri_image,
+            composite,
             sitk.sitkLinear, -1000.0
         )
         self.final_ct_output = resampled_ct
@@ -711,8 +724,37 @@ class FusoftApp(QMainWindow):
         z_idx = self.crop_slider.value()
         original_size = list(self.ct_full.GetSize())
         original_size[2] -= z_idx
-        self.ct_cropped = sitk.RegionOfInterest(self.ct_full, original_size, [0, 0, z_idx])
-        self.initial_transform = sitk.CenteredTransformInitializer(self.mri_obj if hasattr(self, 'mri_obj') else self.mri_image, self.ct_cropped, sitk.Euler3DTransform())
+        ct_roi = sitk.RegionOfInterest(self.ct_full, original_size, [0, 0, z_idx])
+
+        # Resamplear CT al spacing del MRI para igualar la escala física
+        mri_sp = self.mri_image.GetSpacing()
+        ct_sp  = ct_roi.GetSpacing()
+        if tuple(mri_sp) != tuple(ct_sp):
+            new_size = [
+                int(round(ct_roi.GetSize()[i] * ct_sp[i] / mri_sp[i]))
+                for i in range(3)
+            ]
+            resample = sitk.ResampleImageFilter()
+            resample.SetOutputSpacing(mri_sp)
+            resample.SetSize(new_size)
+            resample.SetOutputDirection(ct_roi.GetDirection())
+            resample.SetOutputOrigin(ct_roi.GetOrigin())
+            resample.SetInterpolator(sitk.sitkLinear)
+            resample.SetDefaultPixelValue(-1000.0)
+            ct_roi = resample.Execute(ct_roi)
+
+        self.ct_cropped = ct_roi
+        self.initial_transform = sitk.CenteredTransformInitializer(
+            self.mri_image, self.ct_cropped, sitk.Euler3DTransform()
+        )
+        # Actualizar label de spacing
+        msp = self.mri_image.GetSpacing()
+        csp = ct_roi.GetSpacing()
+        self.lbl_spacing.setText(
+            f"Spacing (x·y·z mm):\n"
+            f"MRI: {msp[0]:.2f}·{msp[1]:.2f}·{msp[2]:.2f}\n"
+            f"CT:  {csp[0]:.2f}·{csp[1]:.2f}·{csp[2]:.2f}"
+        )
         self.ui_stack.setCurrentIndex(2)
         self.refresh_registration_view(is_live=False)
 
