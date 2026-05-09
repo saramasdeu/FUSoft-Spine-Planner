@@ -193,12 +193,11 @@ class RegistrationGizmo(pg.GraphicsObject):
 
 
 class ExpandedViewWindow(QMainWindow):
-    """Ventana flotante que muestra una vista ampliada de un viewer."""
     def __init__(self, source_viewer, parent=None):
         super().__init__(parent)
         self.source_viewer = source_viewer
         orientation = getattr(source_viewer, 'orientation', 'Vista')
-        self.setWindowTitle(f"Vista ampliada — {orientation}")
+        self.setWindowTitle(f"Enlarged view — {orientation}")
         self.resize(900, 700)
 
         central = QWidget()
@@ -383,7 +382,7 @@ class RegistrationViewport(QWidget):
 
         btn_exp = QPushButton("⛶")
         btn_exp.setFixedSize(26, 26)
-        btn_exp.setToolTip("Ampliar vista")
+        btn_exp.setToolTip("View Enlarge view")
         btn_exp.setStyleSheet("font-size:14px; padding:0;")
         btn_exp.clicked.connect(self._open_expanded)
         hdr.addWidget(btn_exp)
@@ -396,7 +395,6 @@ class RegistrationViewport(QWidget):
         
         self.plot_item = self.image_view.getView()
         self.plot_item.setAspectLocked(True)
-        # Zoom con rueda habilitado; pan con botón derecho (por defecto en PlotItem)
         self.plot_item.setMouseEnabled(x=True, y=True)
 
         self.gizmo = RegistrationGizmo(self)
@@ -513,18 +511,51 @@ class FusoftApp(QMainWindow):
         p2 = QWidget()
         l2 = QVBoxLayout(p2)
         crop_view_layout = QHBoxLayout()
-        self.crop_axial_view = pg.ImageView()
+        
+        self.crop_mri_ref_view = pg.ImageView()
         self.crop_sagittal_view = pg.ImageView()
-        crop_view_layout.addWidget(self.crop_axial_view)
-        crop_view_layout.addWidget(self.crop_sagittal_view)
+        self.crop_axial_view = pg.ImageView()
+        
+        for v in [self.crop_mri_ref_view, self.crop_sagittal_view, self.crop_axial_view]:
+            v.ui.roiBtn.hide()
+            v.ui.menuBtn.hide()
+            v.ui.histogram.hide()
+            v.getView().setAspectLocked(True)
+        # MRI Reference
+        mri_col = QVBoxLayout()
+        mri_col.addWidget(QLabel("<b>1. MRI Sagittal Reference</b>"))
+        mri_col.addWidget(self.crop_mri_ref_view)
+        
+        # CT Slab Selection
+        slab_col = QVBoxLayout()
+        slab_col.addWidget(QLabel("<b>2. CT Slab Range (Sagittal)</b>"))
+        slab_col.addWidget(self.crop_sagittal_view)
+        
+        # CT Axial Preview
+        ax_col = QVBoxLayout()
+        ax_col.addWidget(QLabel("<b>3. CT Axial Preview</b>"))
+        ax_col.addWidget(self.crop_axial_view)
+        
+        crop_view_layout.addLayout(mri_col, stretch=1)
+        crop_view_layout.addLayout(slab_col, stretch=1)
+        crop_view_layout.addLayout(ax_col, stretch=1)
+        
         l2.addLayout(crop_view_layout)
         
+        # Sliders i botó (Mantenim igual)
         self.crop_slider = QSlider(Qt.Orientation.Horizontal)
+        self.crop_slider_end = QSlider(Qt.Orientation.Horizontal)
         self.crop_slider.valueChanged.connect(self.update_crop_preview)
-        l2.addWidget(self.crop_slider)
+        self.crop_slider_end.valueChanged.connect(self.update_crop_preview)
         
-        btn_to_reg = QPushButton("Proceed to Registration")
+        l2.addWidget(QLabel("Start segment:"))
+        l2.addWidget(self.crop_slider)
+        l2.addWidget(QLabel("Final segment:"))
+        l2.addWidget(self.crop_slider_end)
+        
+        btn_to_reg = QPushButton("Confirm ROI and proceed")
         btn_to_reg.clicked.connect(self.finalize_cropping)
+        btn_to_reg.setStyleSheet("height: 40px; font-weight: bold;")
         l2.addWidget(btn_to_reg)
         self.ui_stack.addWidget(p2)
         
@@ -603,6 +634,8 @@ class FusoftApp(QMainWindow):
         if path:
             self.mri_image = sitk.ReadImage(path, sitk.sitkFloat32)
             self.mri_array = normalize_intensity(sitk.GetArrayFromImage(self.mri_image))
+            mid_x = self.mri_array.shape[2] // 2
+            self.mri_sagittal_ref = np.flipud(self.mri_array[:, :, mid_x])
             otsu = sitk.Cast(sitk.OtsuThreshold(self.mri_image, 0, 1), sitk.sitkUInt8)
             self.mri_mask = self.process_robust_mask(otsu, 5)
             self.mri_spacing = self.mri_image.GetSpacing()
@@ -624,6 +657,15 @@ class FusoftApp(QMainWindow):
             self.sagittal_baseline = np.flipud(array[:, :, array.shape[2] // 2])
             self.crop_slider.setValue(array.shape[0] // 2)
             self.update_crop_preview()
+            self.validate_input_state()
+            self.crop_slider.setRange(0, array.shape[0] - 1)
+            self.crop_slider_end.setRange(0, array.shape[0] - 1)
+            
+            self.crop_slider.setValue(array.shape[0] // 4)    # Inici al 25%
+            self.crop_slider_end.setValue(3 * array.shape[0] // 4) # Final al 75%
+            
+            self.sagittal_baseline = np.flipud(array[:, :, array.shape[2] // 2])
+            self.update_crop_preview() 
             self.validate_input_state()
 
     def validate_input_state(self):
@@ -713,47 +755,40 @@ class FusoftApp(QMainWindow):
         self.refresh_registration_view(is_live=is_live)
 
     def update_crop_preview(self):
-        z_idx = self.crop_slider.value()
-        self.crop_axial_view.setCurrentIndex(z_idx)
-        sag_view = self.sagittal_baseline.copy()
-        pos = sag_view.shape[0] - z_idx
-        sag_view[max(0, pos - 2):pos + 1, :] = 1.0
-        self.crop_sagittal_view.setImage(sag_view, autoLevels=False)
+        if self.ct_full is None or not hasattr(self, 'mri_sagittal_ref'): return
+        
+        z_start = self.crop_slider.value()
+        z_end = self.crop_slider_end.value()
+        
+        # 1. MRI
+        self.crop_mri_ref_view.setImage(self.mri_sagittal_ref, pos=[0,0], scale=[self.mri_spacing[1], self.mri_spacing[2]])
+        self.crop_mri_ref_view.getView().setAspectLocked(True)
+
+        # 2. CT Sagital
+        v_ct = self.sagittal_baseline.copy()
+        p_start = v_ct.shape[0] - z_start
+        p_end = v_ct.shape[0] - z_end
+        
+        v_ct[max(0, p_start-1):p_start+1, :] = 1.0 # Initial line
+        v_ct[max(0, p_end-1):p_end+1, :] = 0.6     #FInal line
+        
+        self.crop_sagittal_view.setImage(v_ct, autoLevels=False, pos=[0,0], scale=[self.ct_spacing[1], self.ct_spacing[2]])
+        self.crop_sagittal_view.getView().setAspectLocked(True)
+        self.crop_axial_view.setCurrentIndex(z_start)
 
     def finalize_cropping(self):
-        z_idx = self.crop_slider.value()
+        z_min = min(self.crop_slider.value(), self.crop_slider_end.value())
+        z_max = max(self.crop_slider.value(), self.crop_slider_end.value())
+        thickness = max(2, z_max - z_min)
+        
         original_size = list(self.ct_full.GetSize())
-        original_size[2] -= z_idx
-        ct_roi = sitk.RegionOfInterest(self.ct_full, original_size, [0, 0, z_idx])
-
-        # Resamplear CT al spacing del MRI para igualar la escala física
-        mri_sp = self.mri_image.GetSpacing()
-        ct_sp  = ct_roi.GetSpacing()
-        if tuple(mri_sp) != tuple(ct_sp):
-            new_size = [
-                int(round(ct_roi.GetSize()[i] * ct_sp[i] / mri_sp[i]))
-                for i in range(3)
-            ]
-            resample = sitk.ResampleImageFilter()
-            resample.SetOutputSpacing(mri_sp)
-            resample.SetSize(new_size)
-            resample.SetOutputDirection(ct_roi.GetDirection())
-            resample.SetOutputOrigin(ct_roi.GetOrigin())
-            resample.SetInterpolator(sitk.sitkLinear)
-            resample.SetDefaultPixelValue(-1000.0)
-            ct_roi = resample.Execute(ct_roi)
-
-        self.ct_cropped = ct_roi
+        size = [original_size[0], original_size[1], thickness]
+        index = [0, 0, z_min]
+        
+        self.ct_cropped = sitk.RegionOfInterest(self.ct_full, size, index)
+        
         self.initial_transform = sitk.CenteredTransformInitializer(
             self.mri_image, self.ct_cropped, sitk.Euler3DTransform()
-        )
-        # Actualizar label de spacing
-        msp = self.mri_image.GetSpacing()
-        csp = ct_roi.GetSpacing()
-        self.lbl_spacing.setText(
-            f"Spacing (x·y·z mm):\n"
-            f"MRI: {msp[0]:.2f}·{msp[1]:.2f}·{msp[2]:.2f}\n"
-            f"CT:  {csp[0]:.2f}·{csp[1]:.2f}·{csp[2]:.2f}"
         )
         self.ui_stack.setCurrentIndex(2)
         self.refresh_registration_view(is_live=False)
