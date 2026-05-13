@@ -49,7 +49,6 @@ _PANEL_STYLE = """
 """
 
 class MeshWorker(QThread):
-    # Emet: bone_verts, bone_faces, skin_verts, skin_faces
     finished = pyqtSignal(object, object, object, object)
 
     def __init__(self, ct_array, spacing):
@@ -65,15 +64,14 @@ class MeshWorker(QThread):
 
     def run(self):
         try:
-            bv, bf, _, _ = self._mc(threshold=200,  step=2) 
-            sv, sf, _, _ = self._mc(threshold=-100, step=3)  
+            bv, bf, _, _ = self._mc(threshold=200,  step=2)
+            sv, sf, _, _ = self._mc(threshold=-100, step=3)
             self.finished.emit(bv, bf, sv, sf)
         except Exception as e:
             print(f"[MeshWorker] Error: {e}")
             self.finished.emit(None, None, None, None)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -87,7 +85,7 @@ class MainWindow(QMainWindow):
         self._cz         = 0
         self.top10       = []
         self.all_results = []
-        self._bone_mesh  = None  
+        self._bone_mesh  = None
         self._mesh_worker = None
 
         self._build_ui()
@@ -166,7 +164,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.canvas1, 4)
         self.tabs.addTab(tab, "1. Target Selection")
 
-    #TAB 2
+    # TAB 2
     def _build_tab2(self):
         tab = QWidget()
         lay = QHBoxLayout(tab)
@@ -186,7 +184,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.canvas2, 2)
         self.tabs.addTab(tab, "2. Top 10 Results")
 
-    # ── TAB 3 ────────────────────────────────────────────────────────────────
+    # TAB 3
     def _build_tab3(self):
         tab = QWidget()
         main_lay = QVBoxLayout(tab)
@@ -237,7 +235,7 @@ class MainWindow(QMainWindow):
         main_lay.addWidget(splitter)
         self.tabs.addTab(tab, "3. Verification and 3D Profile")
 
-    # ── TAB 4 ────────────────────────────────────────────────────────────────
+    # TAB 4
     def _build_tab4(self):
         tab = QWidget()
         lay = QVBoxLayout(tab)
@@ -250,7 +248,7 @@ class MainWindow(QMainWindow):
         self.full_table = QTableWidget()
         self.full_table.setColumnCount(7)
         self.full_table.setHorizontalHeaderLabels(
-            ["#", "Dist (mm)", "Bone (mm)", "Incidence°", "Density", "ΔDensitt", "Score"])
+            ["#", "Dist (mm)", "Bone (mm)", "Incidence°", "Density", "ΔDensity", "Score"])
         self.full_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         self.full_table.setAlternatingRowColors(True)
         self.full_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -279,10 +277,10 @@ class MainWindow(QMainWindow):
             head    = sitk.BinaryThreshold(cleaned, lowerThreshold=1, upperThreshold=1)
             img     = sitk.Mask(img, head, outsideValue=-1000)
             self.ct_array = sitk.GetArrayFromImage(img)
-            self._bone_mesh = None 
+            self._bone_mesh = None
             self._redraw1()
 
-    # TAB 1 Navegation
+    # Tab 1 Navigation
     def _on_z(self, v):
         self._cz = v
         self.lbl_slice.setText(f"Slice Z:  {v}")
@@ -346,7 +344,7 @@ class MainWindow(QMainWindow):
         self.fig1.tight_layout(pad=1.5)
         self.canvas1.draw()
 
-    # Skin detection
+    # Skin detection (unused in _run, kept for reference)
     def _on_skin(self, x, y, z):
         xi = int(round(x))
         yi = int(round(y))
@@ -355,7 +353,7 @@ class MainWindow(QMainWindow):
         if not (0 <= xi < nx and 0 <= yi < ny and 0 <= zi < nz):
             return False
         if self.ct_array[zi, yi, xi] < -300:
-            return False 
+            return False
 
         def _has_air_neighbor_2d(slice_2d, row, col):
             h, w = slice_2d.shape
@@ -366,9 +364,9 @@ class MainWindow(QMainWindow):
                         return True
             return False
 
-        axial_ok   = _has_air_neighbor_2d(self.ct_array[zi],         yi, xi)
-        sagital_ok = _has_air_neighbor_2d(self.ct_array[:, :, xi],   zi, yi)
-        coronal_ok = _has_air_neighbor_2d(self.ct_array[:, yi, :],   zi, xi)
+        axial_ok   = _has_air_neighbor_2d(self.ct_array[zi],       yi, xi)
+        sagital_ok = _has_air_neighbor_2d(self.ct_array[:, :, xi], zi, yi)
+        coronal_ok = _has_air_neighbor_2d(self.ct_array[:, yi, :], zi, xi)
 
         return axial_ok and sagital_ok and coronal_ok
 
@@ -384,15 +382,19 @@ class MainWindow(QMainWindow):
         sx, sy, sz = self.spacing
         results = []
 
-        MAX_BONE_MM = 10.0   #>10mm of bone → always discarded
+        MAX_BONE_MM = 10.0   # >10mm of bone → always discarded
 
         print(f"[NCE] Target: {self.target}, spacing: {self.spacing}")
 
-        body_mask          = (self.ct_array > -300).astype(np.float32)
+        # Precompute body mask gradient for skin normal estimation.
+        # The gradient of the binary mask is perpendicular to the skin surface
+        # → gives us the real local normal at each skin point.
+        body_mask = (self.ct_array > -300).astype(np.float32)
         gz_vol, gy_vol, gx_vol = np.gradient(body_mask)   # [dA/dz, dA/dy, dA/dx]
 
-        # Instead of 2D slices, we shoot rays in all directions of space.
-        #phi = elevation (0=up, π=down), theta = azimuth (0…2π)
+        # True 3D spherical exploration:
+        # Instead of 2D slices, shoot rays in all directions of space.
+        # phi = elevation (0=up, π=down), theta = azimuth (0…2π)
         n_phi   = 60
         n_theta = 120
         phis   = np.linspace(0.05 * np.pi, 0.95 * np.pi, n_phi)
@@ -405,7 +407,7 @@ class MainWindow(QMainWindow):
                 dy_mm = np.sin(phi) * np.sin(theta)
                 dz_mm = np.cos(phi)
 
-                # Vectorized beam: steps from 1mm to 200mm
+                # Vectorized ray: 1mm steps up to 200mm
                 steps  = np.arange(5.0, 200.0, 1.0)
                 xi_arr = np.round(xt + dx_mm * steps / sx).astype(int)
                 yi_arr = np.round(yt + dy_mm * steps / sy).astype(int)
@@ -417,18 +419,34 @@ class MainWindow(QMainWindow):
                 xi_v, yi_v, zi_v = xi_arr[valid], yi_arr[valid], zi_arr[valid]
                 if len(xi_v) == 0: continue
 
-                # First air voxel = skin surface
-                air_idx = np.where(self.ct_array[zi_v, yi_v, xi_v] < -300)[0]
-                if len(air_idx) == 0: continue
-                si      = air_idx[0]
+                # ── Outside-in skin detection ─────────────────────────────
+                # Do NOT look for the first air from the target outward —
+                # that would land on internal cavities (nasal sinuses, cranial
+                # diploe, etc.). Instead, scan the ray in reverse and find the
+                # first tissue voxel coming from outside.
+                # Transition: external air → first tissue = true skin surface.
+                intensities = self.ct_array[zi_v, yi_v, xi_v]
+
+                # The ray must actually exit the body (last voxels = external air)
+                if len(intensities) == 0 or intensities[-1] >= -300:
+                    continue   # ray doesn't exit the body → skip this direction
+
+                body_from_outside = np.where(intensities[::-1] >= -300)[0]
+                if len(body_from_outside) == 0: continue
+                si = len(intensities) - 1 - int(body_from_outside[0])
                 ex, ey, ez = float(xi_v[si]), float(yi_v[si]), float(zi_v[si])
+
+                # Spine application: only accept entry points above the target
+                # (posterior neck / back region). Remove this filter for brain.
+                if ey > yt:
+                    continue
 
                 dist_mm = float(np.sqrt(((xt - ex) * sx) ** 2 +
                                         ((yt - ey) * sy) ** 2 +
                                         ((zt - ez) * sz) ** 2))
                 if dist_mm < 20: continue
 
-                #HU profile of the 3D skin → target beam 
+                # HU profile of the 3D skin → target ray
                 t  = np.linspace(0, 1, N_STEPS)
                 xr = ex + (xt - ex) * t
                 yr = ey + (yt - ey) * t
@@ -448,9 +466,10 @@ class MainWindow(QMainWindow):
                 mean_density    = float(np.mean(profile))
                 density_changes = int(np.sum(np.abs(np.diff(profile)) > 50))
 
-                # Absolute bone threshold (always, regardless of the rest)
+                # Absolute bone threshold (always discarded regardless of the rest)
                 if bone > MAX_BONE_MM: continue
 
+                # ── True incidence angle: ray vs real skin normal ─────────
                 # angle = 0° → perpendicular ray (ideal for FUS, no reflection)
                 # angle = 90° → grazing ray (total reflection, unacceptable)
                 xi_c = int(np.clip(round(ex), 0, nx - 1))
@@ -466,7 +485,7 @@ class MainWindow(QMainWindow):
                 n_norm = float(np.linalg.norm(normal_vox))
 
                 if n_norm < 1e-6:
-                    incidence_angle = 45.0 
+                    incidence_angle = 45.0   # fallback if normal is unclear
                 else:
                     normal_unit = normal_vox / n_norm
                     traj_mm     = np.array([(xt - ex) * sx,
@@ -476,14 +495,11 @@ class MainWindow(QMainWindow):
                     cos_a       = abs(float(np.dot(traj_unit, normal_unit)))
                     incidence_angle = float(np.degrees(np.arccos(np.clip(cos_a, 0, 1))))
 
-                if ey > yt: 
-                    continue
-
                 results.append({
                     'skin_vox':        (ex, ey, ez),
                     'dist':            dist_mm,
                     'bone':            bone,
-                    'incidence':      incidence_angle,
+                    'incidence':       incidence_angle,
                     'profile':         profile,
                     'mean_density':    mean_density,
                     'density_changes': density_changes,
@@ -493,19 +509,21 @@ class MainWindow(QMainWindow):
         print(f"[NCE] Candidate Trajectories: {len(results)}")
         if not results: return
 
-        DIST_REF    = 150.0   # mm – maximum reasonable distance
-        BONE_REF    = MAX_BONE_MM   # mm – limit already applied, scale 0–10mm
-        ANGLE_REF   = 90.0    # degrees – 0°=ideal, 90°=flat
-        CHANGES_REF = 100.0   #number of abrupt changes of reference
+        # Score with ABSOLUTE thresholds (not relative to the current set).
+        # This prevents a "best of the worst" from looking good.
+        DIST_REF    = 150.0          # mm – maximum reasonable distance
+        BONE_REF    = MAX_BONE_MM    # mm – limit already applied, scale 0–10mm
+        ANGLE_REF   = 90.0           # degrees – 0°=ideal, 90°=grazing
+        CHANGES_REF = 100.0          # reference number of abrupt density changes
 
         distances           = np.array([r['dist']            for r in results])
         thicknesses         = np.array([r['bone']            for r in results])
-        angles_arr          = np.array([r['incidence']      for r in results])
+        angles_arr          = np.array([r['incidence']       for r in results])
         mean_densities      = np.array([r['mean_density']    for r in results])
         density_changes_arr = np.array([r['density_changes'] for r in results])
 
         def abs_norm(arr, ref):
-            """0 = best possible, 10 = at the reference limit (Keysha)."""
+            """0 = best possible, 10 = at the reference limit."""
             return np.clip(arr / ref, 0, 1) * 10
 
         def rel_norm(arr):
@@ -516,7 +534,7 @@ class MainWindow(QMainWindow):
         dist_norm    = abs_norm(distances,           DIST_REF)
         thick_norm   = abs_norm(thicknesses,         BONE_REF)
         angle_norm   = abs_norm(angles_arr,          ANGLE_REF)
-        density_norm = rel_norm(mean_densities)      
+        density_norm = rel_norm(mean_densities)      # relative: HU range varies
         changes_norm = abs_norm(density_changes_arr, CHANGES_REF)
 
         sum_weights = W_DIST + W_THICK + W_ANGLE + W_DENSITY + W_CHANGES
@@ -538,7 +556,7 @@ class MainWindow(QMainWindow):
         self.top10       = results[:10]
         self.all_results = results
 
-        # ── Top 10 (tab 2) ────────────────────────────────────────────────
+        # Top 10 (tab 2)
         self.table.setRowCount(len(self.top10))
         for i, r in enumerate(self.top10):
             self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
@@ -548,7 +566,7 @@ class MainWindow(QMainWindow):
             self.table.setItem(i, 4, QTableWidgetItem(f"{r['mean_density']:.1f}"))
             self.table.setItem(i, 5, QTableWidgetItem(f"{r['score']:.3f}"))
 
-        # ── Totes les trajectòries (tab 4) ───────────────────────────────
+        # All trajectories (tab 4)
         self.full_table.setRowCount(len(results))
         for i, r in enumerate(results):
             self.full_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
@@ -605,7 +623,6 @@ class MainWindow(QMainWindow):
 
     # TAB 3
     def _draw3(self, traj):
-        #2d
         self.ax3_axial.clear(); self.ax3_sagital.clear()
         self.ax3_pr.clear();    self.ax3_gr.clear()
 
@@ -626,12 +643,12 @@ class MainWindow(QMainWindow):
         self.ax3_sagital.plot([ey, yt], [ez, zt], color='yellow', lw=2.5)
         self.ax3_sagital.scatter(ey, ez, color='#2ecc71', s=100, edgecolors='white')
         self.ax3_sagital.scatter(yt, zt, color='red', marker='+', s=200, zorder=5)
-        self.ax3_sagital.set_title("Sagital projection", color='white')
+        self.ax3_sagital.set_title("Sagital Projection", color='white')
         self.ax3_sagital.axis('off')
 
         self.ax3_pr.plot(profile, color='#5dade2', lw=2)
         self.ax3_pr.fill_between(range(len(profile)), 0, profile,
-                                  where=profile > 300, color='red', alpha=0.3, label='Os (>300HU)')
+                                  where=profile > 300, color='red', alpha=0.3, label='Bone (>300HU)')
         self.ax3_pr.set_facecolor('#111')
         self.ax3_pr.set_title("HU Profile", color='white', fontsize=9)
         self.ax3_pr.tick_params(colors='#aaa', labelsize=7)
@@ -652,13 +669,13 @@ class MainWindow(QMainWindow):
         if self._bone_mesh is None and self.ct_array is not None:
             self._build_bone_mesh_async()
 
-    # Bone mesh
+    # Bone mesh (async)
     def _build_bone_mesh_async(self):
         if self._mesh_worker is not None and self._mesh_worker.isRunning():
             return
 
         self._progress = QProgressDialog(
-            "Generating 3D mesh of bone…\n(may take a few seconds)", None, 0, 0, self)
+            "Generating 3D bone mesh…\n(may take a few seconds)", None, 0, 0, self)
         self._progress.setWindowTitle("FUSpine 3D")
         self._progress.setWindowModality(Qt.WindowModality.WindowModal)
         self._progress.setCancelButton(None)
@@ -684,7 +701,7 @@ class MainWindow(QMainWindow):
         self._bone_mesh = make_pv(bv, bf, smooth_iter=20)
         skin_mesh       = make_pv(sv, sf, smooth_iter=15)
 
-        # Bone
+        # Bone: solid beige
         self.pv_plotter.add_mesh(
             self._bone_mesh,
             color='#ecdfc8',
@@ -692,7 +709,7 @@ class MainWindow(QMainWindow):
             smooth_shading=True,
             name='bone',
         )
-        # Skin
+        # Skin: very transparent blue — shows outer contour
         self.pv_plotter.add_mesh(
             skin_mesh,
             color='#a8c8e8',
@@ -703,34 +720,34 @@ class MainWindow(QMainWindow):
         self.pv_plotter.reset_camera()
         self.pv_plotter.render()
 
-    # update 3d trajectory
+    # Update 3D trajectory
     def _update_3d(self, traj):
         sx, sy, sz = self.spacing
         xt, yt, zt = self.target
         ex, ey, ez = traj['skin_vox']
 
-        # Coordenates in mm (x, y, z)
+        # Coordinates in mm (x, y, z)
         p_target = np.array([xt*sx, yt*sy, zt*sz])
         p_entry  = np.array([ex*sx, ey*sy, ez*sz])
 
-        # Tube of trajectory
+        # Trajectory tube
         line = pv.Line(p_entry, p_target, resolution=1)
         tube = line.tube(radius=1.5, n_sides=20)
         self.pv_plotter.add_mesh(tube, color='#2ecc71', opacity=0.95,
                                   smooth_shading=True, name='trajectory')
 
-        # Transductor
+        # Entry sphere (transductor)
         entry_sphere = pv.Sphere(radius=4.0, center=p_entry)
         self.pv_plotter.add_mesh(entry_sphere, color='#2ecc71', opacity=1.0,
                                   smooth_shading=True, name='entry')
 
-        # Target
+        # Target sphere
         tgt_sphere = pv.Sphere(radius=4.0, center=p_target)
         self.pv_plotter.add_mesh(tgt_sphere, color='#e74c3c', opacity=1.0,
                                   smooth_shading=True, name='target_sphere')
 
-        # text
-        label_pts  = pv.PolyData(np.array([p_entry, p_target]))
+        # Text labels
+        label_pts = pv.PolyData(np.array([p_entry, p_target]))
         self.pv_plotter.add_point_labels(
             label_pts,
             ['Transductor', 'Target'],
