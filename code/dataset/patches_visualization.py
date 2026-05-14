@@ -1,102 +1,194 @@
+"""
+patches_visualization.py
+------------------------
+Interactive viewer for MRI/CT patch pairs.
+
+Controls:
+  - Slice slider   : scroll through Z slices
+  - Mouse scroll   : same as slider
+  - Next / Prev    : navigate between patches
+  - Filter buttons : show All / Dataset 1 / Dataset 2 patches
+"""
+
 import os
+import sys
 import glob
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
-import tkinter as tk
-from tkinter import filedialog
 
-# --- CONFIGURACIÓ ---
-PATCH_DIR = "/Users/saramasdeusans/Desktop/TRAIN_DATASET_PATCHES"
+# ===========================================================
+# CONFIGURATION — update this path after running creation_patches.py
+# ===========================================================
+PATCH_DIR = "/Users/saramasdeusans/Desktop/DATASET_NET/patches"
 
-# --- INTERFÍCIE GRÀFICA PER TRIAR PATCH ---
+
+# ===========================================================
+# VIEWER
+# ===========================================================
 class PatchViewer:
-    def __init__(self, patches_list):
-        self.patches = patches_list
-        self.current_idx = 0
-        self.load_current_patch_data()
+    def __init__(self, patch_bases: list[str]):
+        self.all_patches = patch_bases
+        self.filtered    = patch_bases   # active list (may be filtered)
+        self.idx         = 0
 
-        # Creem la figura i els eixos
-        self.fig, (self.ax_mri, self.ax_ct) = plt.subplots(1, 2, figsize=(12, 7))
-        plt.subplots_adjust(bottom=0.25)
+        self._load_patch()
+        self._build_ui()
+        self._draw()
 
-        # Configuració inicial dels gràfics
-        self.fig.suptitle(f"Validant Data Augmentation / Patches\n{self.current_patch_base}", fontsize=14)
-        
-        self.im_mri = self.ax_mri.imshow(np.zeros((128, 128)), cmap='gray', vmin=-1.5, vmax=1.5)
-        self.ax_mri.set_title("MRI Patch (Normalized)")
-        self.ax_mri.axis('off')
+    # -------------------------------------------------------
+    def _load_patch(self):
+        base = self.filtered[self.idx]
+        self.current_name = base
+        self.mri = np.load(os.path.join(PATCH_DIR, base + "_mri.npy"))
+        self.ct  = np.load(os.path.join(PATCH_DIR, base + "_ct.npy"))
+        self.n_slices = self.mri.shape[0]
 
-        self.im_ct = self.ax_ct.imshow(np.zeros((128, 128)), cmap='gray', vmin=-1, vmax=1)
-        self.ax_ct.set_title("CT Patch (Target)")
-        self.ax_ct.axis('off')
+    # -------------------------------------------------------
+    def _build_ui(self):
+        self.fig = plt.figure(figsize=(14, 7))
+        self.fig.patch.set_facecolor("#1e1e1e")
 
-        # Slider de navegació per les llesques (Axis Z)
-        self.s_slice = Slider(plt.axes([0.25, 0.15, 0.5, 0.03]), 'Llesca Z', 0, self.mri_data.shape[0]-1, valinit=self.mri_data.shape[0]//2, valstep=1)
-        self.s_slice.on_changed(self.update_slice)
+        # --- image axes ---
+        self.ax_mri = self.fig.add_axes([0.05, 0.25, 0.40, 0.65])
+        self.ax_ct  = self.fig.add_axes([0.55, 0.25, 0.40, 0.65])
+        for ax in (self.ax_mri, self.ax_ct):
+            ax.axis("off")
+            ax.set_facecolor("#1e1e1e")
 
-        # Botons per canviar de patch
-        self.btn_prev = Button(plt.axes([0.1, 0.05, 0.15, 0.075]), 'Anterior')
-        self.btn_prev.on_clicked(self.prev_patch)
+        self.im_mri = self.ax_mri.imshow(
+            np.zeros((128, 128)), cmap="gray", vmin=-1.5, vmax=1.5)
+        self.im_ct  = self.ax_ct.imshow(
+            np.zeros((128, 128)), cmap="gray", vmin=-1.0, vmax=1.0)
 
-        self.btn_next = Button(plt.axes([0.75, 0.05, 0.15, 0.075]), 'Següent')
-        self.btn_next.on_clicked(self.next_patch)
+        self.ax_mri.set_title("MRI", color="white", fontsize=12)
+        self.ax_ct.set_title("CT  (target)", color="white", fontsize=12)
 
-        # Dibuix inicial
-        self.update_slice(self.mri_data.shape[0]//2)
+        # --- slice slider ---
+        ax_sl = self.fig.add_axes([0.25, 0.14, 0.50, 0.025])
+        self.slider = Slider(
+            ax_sl, "Slice Z", 0, self.n_slices - 1,
+            valinit=self.n_slices // 2, valstep=1, color="#4a90d9"
+        )
+        self.slider.label.set_color("white")
+        self.slider.valtext.set_color("white")
+        self.slider.on_changed(self._on_slider)
 
-    def load_current_patch_data(self):
-        """Carrega el parell de patches (MRI i CT) actual"""
-        self.current_patch_base = self.patches[self.current_idx]
-        mri_path = os.path.join(PATCH_DIR, f"{self.current_patch_base}_mri.npy")
-        ct_path = os.path.join(PATCH_DIR, f"{self.current_patch_base}_ct.npy")
-        
-        self.mri_data = np.load(mri_path)
-        self.ct_data = np.load(ct_path)
+        # --- Prev / Next buttons ---
+        ax_prev = self.fig.add_axes([0.05, 0.04, 0.12, 0.06])
+        ax_next = self.fig.add_axes([0.83, 0.04, 0.12, 0.06])
+        self.btn_prev = Button(ax_prev, "◀  Prev", color="#333", hovercolor="#555")
+        self.btn_next = Button(ax_next, "Next  ▶", color="#333", hovercolor="#555")
+        self.btn_prev.label.set_color("white")
+        self.btn_next.label.set_color("white")
+        self.btn_prev.on_clicked(lambda _: self._navigate(-1))
+        self.btn_next.on_clicked(lambda _: self._navigate(+1))
 
-    def update_slice(self, val):
-        """Actualitza la visualització de la llesca"""
-        idx = int(val)
-        self.im_mri.set_data(np.flipud(self.mri_data[idx, :, :]))
-        self.im_ct.set_data(np.flipud(self.ct_data[idx, :, :]))
+        # --- Filter buttons ---
+        ax_all  = self.fig.add_axes([0.25, 0.04, 0.12, 0.06])
+        ax_ds1  = self.fig.add_axes([0.39, 0.04, 0.12, 0.06])
+        ax_ds2  = self.fig.add_axes([0.53, 0.04, 0.12, 0.06])
+        self.btn_all  = Button(ax_all,  "All",        color="#4a4a4a", hovercolor="#666")
+        self.btn_ds1  = Button(ax_ds1,  "Dataset 1",  color="#4a4a4a", hovercolor="#666")
+        self.btn_ds2  = Button(ax_ds2,  "Dataset 2",  color="#4a4a4a", hovercolor="#666")
+        for b in (self.btn_all, self.btn_ds1, self.btn_ds2):
+            b.label.set_color("white")
+        self.btn_all.on_clicked(lambda _: self._filter("all"))
+        self.btn_ds1.on_clicked(lambda _: self._filter("sub"))
+        self.btn_ds2.on_clicked(lambda _: self._filter("vertebrae"))
+
+        # --- title text ---
+        self.title = self.fig.text(
+            0.5, 0.93, "", ha="center", va="center",
+            color="white", fontsize=11
+        )
+        self.info = self.fig.text(
+            0.5, 0.89, "", ha="center", va="center",
+            color="#aaaaaa", fontsize=9
+        )
+
+        # --- mouse scroll ---
+        self.fig.canvas.mpl_connect("scroll_event", self._on_scroll)
+
+    # -------------------------------------------------------
+    def _draw(self):
+        z = int(self.slider.val)
+        self.im_mri.set_data(np.flipud(self.mri[z]))
+        self.im_ct.set_data(np.flipud(self.ct[z]))
+
+        source = "Dataset 2 — vertebrae" if self.current_name.startswith("vertebrae") \
+                 else "Dataset 1 — coregistration"
+        self.title.set_text(
+            f"Patch {self.idx + 1} / {len(self.filtered)}  —  {self.current_name}"
+        )
+        self.info.set_text(
+            f"Source: {source}   |   "
+            f"Shape: {self.mri.shape}   |   "
+            f"MRI [{self.mri.min():.2f}, {self.mri.max():.2f}]   "
+            f"CT [{self.ct.min():.2f}, {self.ct.max():.2f}]"
+        )
         self.fig.canvas.draw_idle()
 
-    def update_patch(self):
-        """Actualitza tot el visor quan canviem de patch"""
-        self.load_current_patch_data()
-        self.fig.suptitle(f"Validant Data Augmentation / Patches\n{self.current_patch_base}", fontsize=14)
-        
-        # Ajustem els límits del slider per la nova mida de patch
-        self.s_slice.valmax = self.mri_data.shape[0] - 1
-        self.s_slice.set_val(self.mri_data.shape[0] // 2)
-        self.fig.canvas.draw_idle()
+    # -------------------------------------------------------
+    def _on_slider(self, _):
+        self._draw()
 
-    def next_patch(self, event):
-        self.current_idx = (self.current_idx + 1) % len(self.patches)
-        self.update_patch()
+    def _on_scroll(self, event):
+        if event.button == "up":
+            new = min(self.slider.val + 1, self.n_slices - 1)
+        elif event.button == "down":
+            new = max(self.slider.val - 1, 0)
+        else:
+            return
+        self.slider.set_val(new)
 
-    def prev_patch(self, event):
-        self.current_idx = (self.current_idx - 1) % len(self.patches)
-        self.update_patch()
+    def _navigate(self, direction: int):
+        self.idx = (self.idx + direction) % len(self.filtered)
+        self._load_patch()
+        # Reset slider range for new patch
+        self.slider.valmax = self.n_slices - 1
+        self.slider.set_val(self.n_slices // 2)
+        self._draw()
 
-# --- BUCLE PRINCIPAL ---
+    def _filter(self, mode: str):
+        if mode == "all":
+            self.filtered = self.all_patches
+        elif mode == "sub":
+            self.filtered = [p for p in self.all_patches if p.startswith("sub")]
+        elif mode == "vertebrae":
+            self.filtered = [p for p in self.all_patches if p.startswith("vertebrae")]
+
+        if not self.filtered:
+            print(f"[WARN] No patches match filter '{mode}'.")
+            self.filtered = self.all_patches
+
+        self.idx = 0
+        self._load_patch()
+        self.slider.valmax = self.n_slices - 1
+        self.slider.set_val(self.n_slices // 2)
+        self._draw()
+
+
+# ===========================================================
+# MAIN
+# ===========================================================
 if __name__ == "__main__":
-    # 1. Comprovem que la carpeta existeix
-    if not os.path.exists(PATCH_DIR):
-        print(f"❌ Error: No s'ha trobat la carpeta {PATCH_DIR}")
-        sys.exit()
+    if not os.path.isdir(PATCH_DIR):
+        print(f"[ERROR] Patch directory not found: {PATCH_DIR}")
+        sys.exit(1)
 
-    # 2. Busquem la llista de patches (només els de MRI, per no duplicar)
-    mri_patches = sorted(glob.glob(os.path.join(PATCH_DIR, "*_mri.npy")))
-    if len(mri_patches) == 0:
-        print("❌ Error: No hi ha fitxers .npy a la carpeta.")
-        sys.exit()
+    mri_files = sorted(glob.glob(os.path.join(PATCH_DIR, "*_mri.npy")))
+    if not mri_files:
+        print(f"[ERROR] No .npy patch files found in {PATCH_DIR}")
+        sys.exit(1)
 
-    # 3. Extraiem el nom base (subXXXX_patch_Y)
-    patch_bases = [os.path.basename(f).replace("_mri.npy", "") for f in mri_patches]
-    print(f"✅ S'han trobat {len(patch_bases)} parelles de patches per validar.")
+    patch_bases = [os.path.basename(f).replace("_mri.npy", "") for f in mri_files]
+    print(f"Found {len(patch_bases)} patches  ({PATCH_DIR})")
+    ds1 = sum(1 for p in patch_bases if p.startswith("sub"))
+    ds2 = sum(1 for p in patch_bases if p.startswith("vertebrae"))
+    print(f"  Dataset 1 (sub*)       : {ds1}")
+    print(f"  Dataset 2 (vertebrae*) : {ds2}")
 
-    # 4. Iniciem el visor
-    plt.close('all') 
+    plt.close("all")
     viewer = PatchViewer(patch_bases)
     plt.show()
