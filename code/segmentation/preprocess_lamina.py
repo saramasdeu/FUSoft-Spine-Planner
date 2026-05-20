@@ -5,7 +5,7 @@ Pipeline de preprocessat per segmentació de làmina vertebral
 Entrada:
   - CTs:       /MRXFDG-PET-CT-MRI/ALL/sub-XXXX/ct/sub-XXXX_ct.nii.gz
   - Vèrtebres: /segmentacio_totalseg/SUB-XXXX/sub-XXXX_ct segmentation.seg.nrrd
-  - Làmines:   /segmentacio_totalseg/SUB-XXXX/sub-XXXX_ct_LAMINES.seg.nrrd  (5 subjectes) del 0001 al 0005
+  - Làmines:   /segmentacio_totalseg/SUB-XXXX/sub-XXXX_ct_LAMINES.seg.nrrd  (5 subjectes)
 
 Sortida (format nnUNet):
   /nnunet_lamina/Dataset001_Lamina/
@@ -25,14 +25,11 @@ from pathlib import Path
 
 import numpy as np
 import SimpleITK as sitk
-from scipy.ndimage import zoom
 
 # Afegeix el directori pare al path per importar seg_nrrd_utils
 sys.path.append(str(Path(__file__).parent))
 from seg_nrrd_utils import (
     read_seg_nrrd,
-    get_segment_mask,
-    get_combined_mask,
     find_matching_lamina_segments,
     print_segments_info,
 )
@@ -58,17 +55,60 @@ MIN_VOXELS    = 100    # Mínim de vòxels per considerar un segment vàlid
 
 # ─── FUNCIONS DE PREPROCESSAT ─────────────────────────────────────────────────
 
-def resample_mask_to_image_space(mask_arr: np.ndarray, target_shape: tuple) -> np.ndarray:
+def mask_from_seg_nrrd_sitk(
+    seg_path: str,
+    segment: dict,
+    data_ndim: int,
+    ct_sitk: sitk.Image,
+) -> np.ndarray:
     """
-    Resampleja una màscara binària a les dimensions del CT.
-    Necessari quan el .seg.nrrd de Slicer té una resolució diferent al CT original.
-    Usa interpolació nearest-neighbor (order=0) per preservar la binarietat.
+    Llegeix una màscara de segment usant SimpleITK (eixos sempre en Z,Y,X com el CT).
+
+    pynrrd retorna l'array en ordre natiu del fitxer (X,Y,Z), mentre que SimpleITK
+    sempre retorna (Z,Y,X) independentment del format. Per tant, usar SimpleITK
+    per llegir la màscara garanteix que els eixos coincideixin amb el CT.
+
+    Fa sitk.Resample al grid del CT per gestionar diferències de resolució o mida.
     """
-    if mask_arr.shape == target_shape:
-        return mask_arr
-    zoom_factors = tuple(t / s for t, s in zip(target_shape, mask_arr.shape))
-    resampled = zoom(mask_arr.astype(float), zoom_factors, order=0)
-    return (resampled > 0.5).astype(np.uint8)
+    seg_img = sitk.ReadImage(str(seg_path))
+    label_val = int(segment["label_value"])
+
+    if data_ndim == 4:
+        # Fitxer 4D: SimpleITK el llegeix com a VectorImage
+        # (un component = un layer de segments)
+        n_comp = seg_img.GetNumberOfComponentsPerPixel()
+        if n_comp > 1:
+            layer = int(segment["layer"])
+            layer_img = sitk.VectorIndexSelectionCast(seg_img, layer, sitk.sitkUInt8)
+        else:
+            # Fallback: intenta llegir com a 4D escalar i extreu el layer
+            arr4d = sitk.GetArrayFromImage(seg_img)
+            if arr4d.ndim == 4:
+                layer_arr = arr4d[int(segment["layer"])].astype(np.float32)
+            else:
+                layer_arr = arr4d.astype(np.float32)
+            layer_img = sitk.GetImageFromArray(layer_arr)
+            layer_img.SetSpacing(seg_img.GetSpacing())
+            layer_img.SetOrigin(seg_img.GetOrigin())
+            layer_img.SetDirection(seg_img.GetDirection())
+    else:
+        # Fitxer 3D labelmap
+        layer_img = sitk.Cast(seg_img, sitk.sitkUInt8)
+
+    # Binaritza pel label_value del segment
+    mask_img = sitk.BinaryThreshold(layer_img, label_val, label_val, 1, 0)
+
+    # Resampleja al grid exacte del CT (nearest-neighbor per màscares binàries)
+    resampled = sitk.Resample(
+        sitk.Cast(mask_img, sitk.sitkFloat32),
+        ct_sitk,
+        sitk.Transform(),
+        sitk.sitkNearestNeighbor,
+        0.0,
+        sitk.sitkFloat32,
+    )
+    arr = sitk.GetArrayFromImage(resampled)
+    return (arr > 0.5).astype(np.uint8)
 
 
 def normalize_ct(array: np.ndarray) -> np.ndarray:
@@ -192,7 +232,7 @@ def process_subject(
         stats["skipped"] += 1
         return
 
-    vert_data, vert_segments = read_seg_nrrd(str(vert_path))
+    vert_data, vert_segments, _ = read_seg_nrrd(str(vert_path))
     print(f"  Vèrtebres trobades: {[s['name'] for s in vert_segments]}")
 
     # ── Carrega segmentació de làmines (si existeix) ─────────────
@@ -201,7 +241,7 @@ def process_subject(
         lam_path = (SEG_BASE / subject_id.upper() /
                     f"{subject_id}_ct_LAMINES.seg.nrrd")
         if lam_path.exists():
-            lamina_data, lamina_segments = read_seg_nrrd(str(lam_path))
+            lamina_data, lamina_segments, _ = read_seg_nrrd(str(lam_path))
             print(f"  Làmines trobades:  {[s['name'] for s in lamina_segments]}")
         else:
             print(f"  [WARN] Fitxer de làmines no trobat: {lam_path}")
@@ -209,9 +249,10 @@ def process_subject(
 
     # ── Processa cada vèrtebra ───────────────────────────────────
     for vert_seg in vert_segments:
-        vert_mask_arr = get_segment_mask(vert_data, vert_seg)
-        # Resampleja la màscara al mateix espai que el CT (Slicer pot guardar a resolució diferent)
-        vert_mask_arr = resample_mask_to_image_space(vert_mask_arr, ct_arr.shape)
+        # Llegeix la màscara amb SimpleITK (eixos Z,Y,X correctes, com el CT)
+        vert_mask_arr = mask_from_seg_nrrd_sitk(
+            str(vert_path), vert_seg, vert_data.ndim, ct_sitk
+        )
 
         if vert_mask_arr.sum() < MIN_VOXELS:
             print(f"    [SKIP] {vert_seg['name']}: massa pocs vòxels")
@@ -240,18 +281,21 @@ def process_subject(
             if not matching:
                 # Si no hi ha coincidència per nom, usa tota la làmina del subjecte
                 # (menys precís però evita perdre dades)
-                lamina_mask_arr = get_combined_mask(lamina_data, lamina_segments)
-                # Resampleja al mateix espai que el CT
-                lamina_mask_arr = resample_mask_to_image_space(lamina_mask_arr, ct_arr.shape)
-                # Restringeix al bbox de la vèrtebra
+                # Sense coincidència: usa tota la làmina del subjecte restringida a la vèrtebra
+                lamina_mask_arr = np.zeros_like(ct_arr, dtype=np.uint8)
+                for lseg in lamina_segments:
+                    lm = mask_from_seg_nrrd_sitk(
+                        str(lam_path), lseg, lamina_data.ndim, ct_sitk
+                    )
+                    lamina_mask_arr = np.maximum(lamina_mask_arr, lm)
                 lamina_mask_arr = lamina_mask_arr * vert_mask_arr
             else:
                 lamina_mask_arr = np.zeros_like(ct_arr, dtype=np.uint8)
                 for lseg in matching:
-                    lseg_mask = get_segment_mask(lamina_data, lseg)
-                    # Resampleja al mateix espai que el CT
-                    lseg_mask = resample_mask_to_image_space(lseg_mask, ct_arr.shape)
-                    lamina_mask_arr = np.maximum(lamina_mask_arr, lseg_mask)
+                    lm = mask_from_seg_nrrd_sitk(
+                        str(lam_path), lseg, lamina_data.ndim, ct_sitk
+                    )
+                    lamina_mask_arr = np.maximum(lamina_mask_arr, lm)
 
             _, lamina_crop_sitk = crop_and_resample(
                 ct_norm, lamina_mask_arr, bbox, ct_sitk,

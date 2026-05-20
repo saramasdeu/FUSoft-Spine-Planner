@@ -12,14 +12,15 @@ import numpy as np
 import nrrd
 
 
-def read_seg_nrrd(filepath: str) -> tuple[np.ndarray, list[dict]]:
+def read_seg_nrrd(filepath: str) -> tuple[np.ndarray, list[dict], dict]:
     """
     Llegeix un fitxer .seg.nrrd de 3D Slicer.
 
     Retorna:
-        data    : array numpy (Z, Y, X) o (N_layers, Z, Y, X)
+        data    : array numpy tal com el retorna pynrrd
         segments: llista de dicts amb info de cada segment:
                   {'name': str, 'layer': int, 'label_value': int}
+        header  : header complet del fitxer nrrd (necessari per metadata espacial)
     """
     data, header = nrrd.read(str(filepath))
 
@@ -38,7 +39,7 @@ def read_seg_nrrd(filepath: str) -> tuple[np.ndarray, list[dict]]:
     if not segments:
         raise ValueError(f"No s'han trobat segments al fitxer: {filepath}")
 
-    return data, segments
+    return data, segments, header
 
 
 def get_segment_mask(data: np.ndarray, segment: dict) -> np.ndarray:
@@ -109,9 +110,11 @@ def print_segments_info(filepath: str) -> None:
     Funció de diagnòstic: imprimeix els segments trobats en un fitxer .seg.nrrd.
     Útil per verificar que els noms dels segments són correctes.
     """
-    data, segments = read_seg_nrrd(filepath)
+    data, segments, header = read_seg_nrrd(filepath)
     print(f"\nFitxer: {filepath}")
     print(f"Dimensions array: {data.shape}")
+    print(f"Space directions: {header.get('space directions')}")
+    print(f"Space origin:     {header.get('space origin')}")
     print(f"Segments trobats ({len(segments)}):")
     for i, seg in enumerate(segments):
         mask = get_segment_mask(data, seg)
