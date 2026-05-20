@@ -14,10 +14,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-# ─── CONFIGURACIÓ ─────────────────────────────────────────────────────────────
+# CONFIGURACIÓ 
 
 VENV_BIN     = Path("/Users/saramasdeusans/Desktop/TFG_FUSOFT/.venv/bin")
-CHECKPOINT   = Path("/Users/saramasdeusans/Desktop/102_20.50_checkpoint_best (1).pth")
+CHECKPOINT   = Path("/Users/saramasdeusans/Desktop/102_20.50_checkpoint_best (1).pth") # ara amb el model que he entrenat amb volab
 DATASET_DIR  = Path("/Users/saramasdeusans/Documents/nnunet_lamina")
 RESULTS_DIR  = Path("/Users/saramasdeusans/Documents/nnunet_results")
 PREPROC_DIR  = Path("/Users/saramasdeusans/Documents/nnunet_preprocessed")

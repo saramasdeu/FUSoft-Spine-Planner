@@ -3,19 +3,27 @@
 Pipeline de preprocessat per segmentació de làmina vertebral
 =============================================================
 Entrada:
-  - CTs:       /MRXFDG-PET-CT-MRI/ALL/sub-XXXX/ct/sub-XXXX_ct.nii.gz
-  - Vèrtebres: /segmentacio_totalseg/SUB-XXXX/sub-XXXX_ct segmentation.seg.nrrd
-  - Làmines:   /segmentacio_totalseg/SUB-XXXX/sub-XXXX_ct_LAMINES.seg.nrrd  (5 subjectes)
+  - CTs:       --ct_dir / sub-XXXX/ct/sub-XXXX_ct.nii.gz
+  - Vèrtebres: --seg_dir / SUB-XXXX/sub-XXXX_ct segmentation.seg.nrrd
+  - Làmines:   --seg_dir / SUB-XXXX/sub-XXXX_ct_LAMINES.seg.nrrd
 
 Sortida (format nnUNet):
-  /nnunet_lamina/Dataset001_Lamina/
-  ├── imagesTr/   ← canal 0: CT crop normalitzat  | canal 1: màscara vèrtebra
-  ├── labelsTr/   ← màscara binària de làmina (ground truth)
-  ├── imagesTs/   ← subjectes sense làmina anotada (per inferència)
+  --out_dir / Dataset001_Lamina/
+  ├── imagesTr/
+  ├── labelsTr/
+  ├── imagesTs/
   └── dataset.json
 
-Ús:
-    python preprocess_lamina.py [--inspect]  # --inspect per veure noms de segments
+Ús (rutes per defecte per a la Sara):
+    python preprocess_lamina.py
+
+Ús amb rutes personalitzades (per al tutor o altre ordinador):
+    python preprocess_lamina.py \\
+        --ct_dir  /ruta/als/CTs \\
+        --seg_dir /ruta/a/segmentacio_totalseg \\
+        --out_dir /ruta/sortida
+
+    python preprocess_lamina.py --inspect
 """
 
 import argparse
@@ -34,9 +42,11 @@ from seg_nrrd_utils import (
     print_segments_info,
 )
 
-# ─── PATHS ────────────────────────────────────────────────────────────────────
+# ─── PATHS PER DEFECTE (màquina de la Sara) ───────────────────────────────────
+# Canvia aquestes rutes si executes en un altre ordinador,
+# o usa els arguments --ct_dir / --seg_dir / --out_dir per línia de comandes.
 CT_BASE  = Path("/Users/saramasdeusans/Desktop/MRXFDG-PET-CT-MRI/ALL")
-SEG_BASE = Path("/Users/saramasdeusans/Desktop/segmentacio_totalseg")
+SEG_BASE = Path("/Users/saramasdeusans/Desktop/nnunet_lamina/segmentacio_totalseg")
 OUT_BASE = Path("/Users/saramasdeusans/Desktop/nnunet_lamina/Dataset001_Lamina")
 
 # Subjectes amb vèrtebra segmentada (SUB-0001 a SUB-0020)
@@ -357,10 +367,34 @@ def create_dataset_json(output_dir: Path, n_train: int) -> None:
 def main():
     parser = argparse.ArgumentParser(description="Preprocessat pipeline làmina vertebral")
     parser.add_argument(
+        "--ct_dir", type=Path, default=None,
+        help="Carpeta amb els CTs (sub-XXXX/ct/sub-XXXX_ct.nii.gz). "
+             "Si no s'especifica, usa el valor per defecte del script."
+    )
+    parser.add_argument(
+        "--seg_dir", type=Path, default=None,
+        help="Carpeta segmentacio_totalseg. "
+             "Si no s'especifica, usa el valor per defecte del script."
+    )
+    parser.add_argument(
+        "--out_dir", type=Path, default=None,
+        help="Carpeta de sortida per al dataset nnUNet. "
+             "Si no s'especifica, usa el valor per defecte del script."
+    )
+    parser.add_argument(
         "--inspect", action="store_true",
         help="Mostra els noms dels segments de cada fitxer i surt (per diagnòstic)"
     )
     args = parser.parse_args()
+
+    # Sobreescriu les rutes per defecte si s'han especificat per arguments
+    global CT_BASE, SEG_BASE, OUT_BASE
+    if args.ct_dir:
+        CT_BASE = args.ct_dir
+    if args.seg_dir:
+        SEG_BASE = args.seg_dir
+    if args.out_dir:
+        OUT_BASE = args.out_dir
 
     # Mode inspecció: mostra noms de segments per ajudar a configurar el matching
     if args.inspect:
