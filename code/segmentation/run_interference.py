@@ -18,10 +18,10 @@ from pathlib import Path
 
 VENV_BIN     = Path("/Users/saramasdeusans/Desktop/TFG_FUSOFT/.venv/bin")
 CHECKPOINT   = Path("/Users/saramasdeusans/Desktop/102_20.50_checkpoint_best (1).pth") # ara amb el model que he entrenat amb volab
-DATASET_DIR  = Path("/Users/saramasdeusans/Documents/nnunet_lamina")
-RESULTS_DIR  = Path("/Users/saramasdeusans/Documents/nnunet_results")
-PREPROC_DIR  = Path("/Users/saramasdeusans/Documents/nnunet_preprocessed")
-PRED_DIR     = Path("/Users/saramasdeusans/Documents/nnunet_predictions")
+DATASET_DIR  = Path("/Users/saramasdeusans/Desktop/nnunet_lamina")
+RESULTS_DIR  = Path("/Users/saramasdeusans/Desktop/nunnet_lamina/nnunet_results")
+PREPROC_DIR  = Path("/Users/saramasdeusans/Desktop/nunnet_lamina/nnunet_preprocessed")
+PRED_DIR     = Path("/Users/saramasdeusans/Desktop/nunnet_lamina/nnunet_predictions")
 TEST_DIR     = Path("/tmp/lamina_1cas")
 
 CKPT_DIR = (RESULTS_DIR /

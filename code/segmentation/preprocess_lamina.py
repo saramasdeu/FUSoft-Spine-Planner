@@ -448,7 +448,7 @@ def main():
     print(f"  Total crops generats:                        {case_counter[0]}")
     print("=" * 60)
     print(f"\nDataset llest a: {OUT_BASE}")
-    print("Proper pas: pujar la carpeta a Google Drive i entrenar amb nnUNet a Colab.")
+    print("Proper pas: pujar la carpeta a Google Drive i entrenar amb nnUNet.")
 
 
 if __name__ == "__main__":
