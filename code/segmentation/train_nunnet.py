@@ -106,8 +106,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--dataset_zip", type=Path,
-        default=Path(__file__).parent / f"{DATASET_NAME}.zip",
+        default=None,
         help="Ruta al ZIP del dataset preprocessat",
+    )
+    parser.add_argument(
+        "--dataset_dir", type=Path,
+        default=None,
+        help="Ruta a la carpeta Dataset001_Lamina (si no tens ZIP)",
     )
     parser.add_argument(
         "--base_dir", type=Path, default=BASE_DIR,
@@ -181,17 +186,34 @@ def main() -> None:
     bin_dir = find_nnunet_bin(args.venv_bin)
     print(f"\n  Binaris nnUNet a: {bin_dir}")
 
-    # ── Descomprimeix dataset ─────────────────────────────────────────────────
+    # ── Descomprimeix o copia dataset ─────────────────────────────────────────
     dataset_dest = raw_dir / DATASET_NAME
     if not dataset_dest.exists():
-        if not args.dataset_zip.exists():
-            print(f"\n✗ No s'ha trobat el ZIP del dataset: {args.dataset_zip}")
-            print("  Especifica la ruta amb --dataset_zip /ruta/Dataset001_Lamina.zip")
-            sys.exit(1)
-        print(f"\n1. Descomprimint dataset a {raw_dir} ...")
-        with zipfile.ZipFile(args.dataset_zip, "r") as zf:
-            zf.extractall(raw_dir)
-        print("   ✓ Dataset descomprimit")
+        if args.dataset_dir and args.dataset_dir.exists():
+            # Carpeta directa — copia al directori de treball
+            print(f"\n1. Copiant dataset des de {args.dataset_dir} ...")
+            shutil.copytree(args.dataset_dir, dataset_dest)
+            print("   ✓ Dataset copiat")
+        elif args.dataset_zip and args.dataset_zip.exists():
+            # ZIP — descomprimeix
+            print(f"\n1. Descomprimint dataset a {raw_dir} ...")
+            with zipfile.ZipFile(args.dataset_zip, "r") as zf:
+                zf.extractall(raw_dir)
+            print("   ✓ Dataset descomprimit")
+        else:
+            # Cerca automàtica del ZIP a la mateixa carpeta que el script
+            default_zip = Path(__file__).parent / f"{DATASET_NAME}.zip"
+            if default_zip.exists():
+                print(f"\n1. Descomprimint dataset a {raw_dir} ...")
+                with zipfile.ZipFile(default_zip, "r") as zf:
+                    zf.extractall(raw_dir)
+                print("   ✓ Dataset descomprimit")
+            else:
+                print(f"\n✗ No s'ha trobat el dataset.")
+                print(f"  Opcions:")
+                print(f"    --dataset_zip /ruta/Dataset001_Lamina.zip")
+                print(f"    --dataset_dir /ruta/Dataset001_Lamina")
+                sys.exit(1)
     else:
         print(f"\n1. Dataset ja present a {dataset_dest} — saltant descompressió")
 
