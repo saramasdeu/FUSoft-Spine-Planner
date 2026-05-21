@@ -127,8 +127,9 @@ def main() -> None:
         help="Fold de cross-validation (0–4)",
     )
     parser.add_argument(
-        "--device", choices=["cuda", "cpu", "mps"], default="cuda",
-        help="Dispositiu de còmput (cuda=GPU NVIDIA, mps=GPU Apple Silicon)",
+        "--device", choices=["cuda", "cpu", "mps"], default=None,
+        help="Dispositiu de còmput (cuda=GPU NVIDIA, mps=GPU Apple Silicon). "
+             "Si no s'especifica, es detecta automàticament.",
     )
     parser.add_argument(
         "--resume", action="store_true",
@@ -164,6 +165,17 @@ def main() -> None:
     print(f"  Epochs              = {args.epochs}")
     print(f"  Fold                = {args.fold}")
     print(f"  Reprendre           = {args.resume}")
+
+    # ── Auto-detecta dispositiu si no s'ha especificat ───────────────────────
+    if args.device is None:
+        import torch
+        if torch.cuda.is_available():
+            args.device = "cuda"
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            args.device = "mps"
+        else:
+            args.device = "cpu"
+        print(f"\n  Device auto-detectat    = {args.device}")
 
     # ── Troba binaris nnUNet ──────────────────────────────────────────────────
     bin_dir = find_nnunet_bin(args.venv_bin)
