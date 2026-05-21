@@ -71,22 +71,23 @@ def run(cmd: list, env: dict | None = None) -> None:
 
 def find_nnunet_bin(venv_bin: Path | None) -> Path:
     """
-    Troba el binari nnUNetv2_train.
+    Troba el directori bin que conté nnUNetv2_train.
     Prioritza el venv especificat, llavors el PATH del sistema.
     """
-    candidates = []
+    # Opció 1: venv_bin passat explícitament
     if venv_bin:
-        candidates.append(venv_bin / "nnUNetv2_train")
-    # Cerca al PATH
+        candidate = venv_bin / "nnUNetv2_train"
+        if candidate.exists():
+            return venv_bin
+        # Potser han passat el directori arrel del venv en lloc de /bin
+        candidate2 = venv_bin / "bin" / "nnUNetv2_train"
+        if candidate2.exists():
+            return venv_bin / "bin"
+
+    # Opció 2: cerca al PATH del sistema (inclou el venv actiu)
     system_bin = shutil.which("nnUNetv2_train")
     if system_bin:
-        candidates.append(Path(system_bin).parent)
-
-    for c in candidates:
-        if isinstance(c, Path) and c.exists():
-            return c.parent   # retorna la carpeta bin
-        if isinstance(c, Path) and (c / "nnUNetv2_train").exists():
-            return c
+        return Path(system_bin).parent   # ja és el directori bin correcte
 
     print(
         "✗ No s'ha trobat nnUNetv2_train.\n"
@@ -217,7 +218,6 @@ def main() -> None:
         str(args.fold),
         "--npz",                   # guarda softmax per a possibles ensembles
         "-device", args.device,
-        "--num_epochs", str(args.epochs),  # funciona a nnunetv2 ≥ 2.3
     ]
     if args.resume:
         train_cmd.append("--c")    # continua des de checkpoint_latest
