@@ -356,15 +356,10 @@ def main():
     ]
 
     dataset = {
-        "name": "LaminaMRI",
-        "description": "Segmentació de làmina vertebral en imatges MRI FLAIR",
-        "tensorImageSize": "3D",
-        "modality": {"0": "MRI", "1": "MRI"},
-        "labels": {"0": "background", "1": "lamina"},
+        "channel_names": {"0": "MRI", "1": "MRI"},
+        "labels": {"background": 0, "lamina": 1},
         "numTraining": len(training_list),
-        "numTest": total_ts,
-        "training": training_list,
-        "test": []
+        "file_ending": ".nii.gz"
     }
 
     with open(OUTPUT_DIR / "dataset.json", "w") as f:
