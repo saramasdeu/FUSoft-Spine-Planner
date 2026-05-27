@@ -36,7 +36,7 @@ import SimpleITK as sitk
 
 # Afegeix el directori pare al path per importar seg_nrrd_utils
 sys.path.append(str(Path(__file__).parent))
-from seg_nrrd_utils import (
+from seg_nrrd_utils_ct import (
     read_seg_nrrd,
     find_matching_lamina_segments,
     print_segments_info,
