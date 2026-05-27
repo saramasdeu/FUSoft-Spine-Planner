@@ -78,19 +78,32 @@ def get_segment_label_map(header: dict) -> dict[str, int]:
     return label_map
 
 
-def nrrd_to_sitk(data: np.ndarray, header: dict) -> sitk.Image:
+def nrrd_to_sitk(data: np.ndarray, header: dict,
+                  reference: sitk.Image = None) -> sitk.Image:
     """
-    Converteix array numpy + capçalera nrrd a SimpleITK Image
-    preservant l'espai (origin, spacing, direction).
+    Converteix array numpy + capçalera nrrd a SimpleITK Image.
+
+    Si es passa 'reference' i la mida coincideix, copia directament la
+    geometria de la referència (evita errors de conversió RAS/LPS entre
+    versions de 3D Slicer).
     """
-    # nrrd és [z,y,x] o [x,y,z] segons 'kinds'; SimpleITK és [x,y,z]
-    # La majoria de .seg.nrrd de Slicer usen ordre [k,j,i] → transposem
+    # nrrd de Slicer: ordre [k,j,i] → transposem a [i,j,k] = [x,y,z]
     if data.ndim == 3:
         arr = data.transpose(2, 1, 0).astype(np.int16)
     else:
         arr = data.astype(np.int16)
 
     img = sitk.GetImageFromArray(arr)
+
+    # ── Estratègia preferida: copiar geometria de la MRI de referència ──
+    if reference is not None and tuple(arr.shape[::-1]) == reference.GetSize():
+        img.CopyInformation(reference)
+        return img
+
+    # ── Fallback: extreure geometria del header nrrd ──────────────────
+    # Detecta si l'espai és RAS (cal negar x i y per passar a LPS)
+    space = header.get("space", "").lower().replace("-", "").replace(" ", "")
+    is_ras = space in ("rightanteriorsuperior", "ras")
 
     # Spacing
     if "space directions" in header:
@@ -100,16 +113,23 @@ def nrrd_to_sitk(data: np.ndarray, header: dict) -> sitk.Image:
     elif "spacings" in header:
         img.SetSpacing(tuple(float(s) for s in header["spacings"]))
 
-    # Origin
+    # Origin (converteix RAS → LPS si cal)
     if "space origin" in header:
-        img.SetOrigin(tuple(float(v) for v in header["space origin"]))
+        origin = [float(v) for v in header["space origin"]]
+        if is_ras:
+            origin[0] = -origin[0]
+            origin[1] = -origin[1]
+        img.SetOrigin(tuple(origin))
 
-    # Direction
+    # Direction (converteix RAS → LPS si cal)
     if "space directions" in header:
         sd = np.array(header["space directions"])
-        spacing = np.array([np.linalg.norm(sd[i]) for i in range(3)])
-        direction = (sd / spacing[:, None]).flatten().tolist()
-        img.SetDirection(direction)
+        spacing_arr = np.array([np.linalg.norm(sd[i]) for i in range(3)])
+        direction = sd / spacing_arr[:, None]
+        if is_ras:
+            direction[0] = -direction[0]
+            direction[1] = -direction[1]
+        img.SetDirection(direction.flatten().tolist())
 
     return img
 
@@ -211,7 +231,7 @@ def process_subject(subj: str, has_lamina: bool,
         return 0
 
     seg_data, seg_header = load_seg_nrrd(seg_path)
-    seg_sitk = nrrd_to_sitk(seg_data, seg_header)
+    seg_sitk = nrrd_to_sitk(seg_data, seg_header, reference=mri)
     seg_sitk = resample_to_reference(seg_sitk, mri, is_label=True)
     seg_label_map = get_segment_label_map(seg_header)
     print(f"  ✓ Segmentació vèrtebres: {len(seg_label_map)} segments")
@@ -227,7 +247,7 @@ def process_subject(subj: str, has_lamina: bool,
             has_lamina = False
         else:
             lam_data, lam_header = load_seg_nrrd(lam_path)
-            lamina_sitk = nrrd_to_sitk(lam_data, lam_header)
+            lamina_sitk = nrrd_to_sitk(lam_data, lam_header, reference=mri)
             lamina_sitk = resample_to_reference(lamina_sitk, mri, is_label=True)
             lam_lbl = get_segment_label_map(lam_header)
             print(f"  ✓ Làmina carregada: {list(lam_lbl.keys())}")

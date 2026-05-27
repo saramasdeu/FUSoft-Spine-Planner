@@ -3,11 +3,11 @@ import os
 import numpy as np
 import SimpleITK as sitk
 import pyqtgraph as pg
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-                             QHBoxLayout, QPushButton, QSlider, QLabel, 
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
+                             QHBoxLayout, QPushButton, QSlider, QLabel,
                              QFileDialog, QStackedWidget, QMessageBox,
                              QDoubleSpinBox, QFrame, QScrollArea, QGridLayout, QCheckBox)
-from PyQt6.QtCore import Qt, QRectF, QPointF
+from PyQt6.QtCore import Qt, QRectF, QPointF, QThread, pyqtSignal
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPolygonF
 
 pg.setConfigOptions(imageAxisOrder='row-major')
@@ -264,12 +264,12 @@ class VolumeSliceViewer(QWidget):
         self.title_label = QLabel(f"<b>{label}</b>")
         self.image_view = pg.ImageView()
         self.image_view.ui.histogram.hide()
-        self.image_view.ui.roiBtn.hide()    # ← afegeix
-        self.image_view.ui.menuBtn.hide()   # ← afegeix
+        self.image_view.ui.roiBtn.hide()
+        self.image_view.ui.menuBtn.hide()
         self.slice_slider = QSlider(Qt.Orientation.Horizontal)
         header = QHBoxLayout()
         header.addWidget(self.title_label)
-        btn_expand = QPushButton("\u26f6")
+        btn_expand = QPushButton("⛶")
         btn_expand.setFixedSize(26, 26)
         btn_expand.setToolTip("Ampliar vista")
         btn_expand.setStyleSheet("font-size:14px; padding:0;")
@@ -320,13 +320,13 @@ class RegistrationViewport(QWidget):
         layout.setContentsMargins(2, 2, 2, 2)
         hdr = QHBoxLayout()
         hdr.addWidget(QLabel(f"<b>{label}</b>"))
-        btn_reset = QPushButton("\u27f3")
+        btn_reset = QPushButton("⟳")
         btn_reset.setFixedSize(26, 26)
         btn_reset.setToolTip("Reset zoom")
         btn_reset.setStyleSheet("font-size:14px; padding:0;")
         btn_reset.clicked.connect(self._reset_zoom)
         hdr.addWidget(btn_reset)
-        btn_exp = QPushButton("\u26f6")
+        btn_exp = QPushButton("⛶")
         btn_exp.setFixedSize(26, 26)
         btn_exp.setToolTip("Ampliar vista")
         btn_exp.setStyleSheet("font-size:14px; padding:0;")
@@ -397,12 +397,52 @@ class RegistrationViewport(QWidget):
         self.gizmo.setPos(slice_img.shape[1] * scale_x / 2, slice_img.shape[0] * scale_y / 2)
 
 
+# ── Worker per al registre automàtic (evita bloquejar el main thread) ─────────
+class RegistrationWorker(QThread):
+    finished = pyqtSignal(object)
+
+    def __init__(self, mri_image, ct_cropped, initial_transform):
+        super().__init__()
+        self.mri_image = mri_image
+        self.ct_cropped = ct_cropped
+        self.initial_transform = initial_transform
+
+    def run(self):
+        reg_method = sitk.ImageRegistrationMethod()
+
+        # Mètrica: mutual information amb mostreig aleatori (més robust)
+        reg_method.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
+        reg_method.SetMetricSamplingStrategy(reg_method.RANDOM)
+        reg_method.SetMetricSamplingPercentage(0.1)
+        reg_method.SetInterpolator(sitk.sitkLinear)
+
+        # Escales automàtiques — CRUCIAL: equilibra rotació (rad) i translació (mm)
+        # Sense això, el gradient mou les rotacions de forma descontrolada
+        reg_method.SetOptimizerAsRegularStepGradientDescent(
+            learningRate=1.0,
+            minStep=0.001,
+            numberOfIterations=300,
+            gradientMagnitudeTolerance=1e-8
+        )
+        reg_method.SetOptimizerScalesFromPhysicalShift()
+
+        # Registre multi-resolució: primer alinea a escala gruixuda, després refina
+        reg_method.SetShrinkFactorsPerLevel([8, 4, 2, 1])
+        reg_method.SetSmoothingSigmasPerLevel([3.0, 2.0, 1.0, 0.0])
+        reg_method.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+
+        reg_method.SetInitialTransform(sitk.Euler3DTransform(self.initial_transform), inPlace=True)
+        final_tx = reg_method.Execute(self.mri_image, self.ct_cropped)
+        self.finished.emit(final_tx)
+
+
 class FusoftApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("FUSOFT - Image Registration System")
         self.showMaximized()
         self.mri_image = self.ct_full = self.ct_cropped = self.initial_transform = None
+        self._reg_worker = None
         self.ui_stack = QStackedWidget()
         self.setCentralWidget(self.ui_stack)
         self.setup_interface()
@@ -497,9 +537,9 @@ class FusoftApp(QMainWindow):
         self.lbl_dice.setStyleSheet("font-size: 18px; color: #f1c40f; font-weight: bold; background: #2c3e50; padding: 5px;")
         panel_layout.addWidget(self.lbl_dice)
 
-        btn_auto = QPushButton("Automated Registration")
-        btn_auto.clicked.connect(self.run_automated_registration)
-        panel_layout.addWidget(btn_auto)
+        self.btn_auto = QPushButton("Automated Registration")
+        self.btn_auto.clicked.connect(self.run_automated_registration)
+        panel_layout.addWidget(self.btn_auto)
 
         self.chk_overlay = QCheckBox("Show Visual Overlay")
         self.chk_overlay.stateChanged.connect(lambda: self.refresh_registration_view(is_live=False))
@@ -507,7 +547,7 @@ class FusoftApp(QMainWindow):
         panel_layout.addWidget(QLabel("<hr>"))
 
         # Info spacing
-        self.lbl_spacing = QLabel("Spacing (x\u00b7y\u00b7z mm):\nMRI: \u2014\nCT:  \u2014")
+        self.lbl_spacing = QLabel("Spacing (x·y·z mm):\nMRI: —\nCT:  —")
         self.lbl_spacing.setStyleSheet(
             "font-size:11px; color:#ecf0f1; background:#1a252f; padding:6px; border:1px solid #445;"
         )
@@ -591,14 +631,24 @@ class FusoftApp(QMainWindow):
         stats = sitk.LabelShapeStatisticsImageFilter()
         stats.Execute(components)
         if stats.GetNumberOfLabels() > 0:
-            largest_idx = max(range(1, stats.GetNumberOfLabels() + 1), key=lambda l: stats.GetNumberOfPixels(l))
+            largest_idx = max(range(1, stats.GetNumberOfLabels() + 1),
+                          key=lambda l: stats.GetNumberOfPixels(l))
             cleaned_ct = components == largest_idx
         else:
             cleaned_ct = thresholded_ct
         self.last_ct_mask = self.process_robust_mask(sitk.Cast(cleaned_ct, sitk.sitkUInt8), 5)
+
+    # Zona vàlida: on el CT resampleat té dades reals (no el -1000 de farciment)
+    # Ambdues màscares es restringeixen a aquesta zona → DSC just dins del FOV del CT
+        ct_valid = sitk.BinaryThreshold(registered_ct, -999, 5000, 1, 0)
+        ct_valid = sitk.Cast(ct_valid, sitk.sitkUInt8)
+
+        mri_roi = sitk.And(self.mri_mask, ct_valid)
+        ct_roi  = sitk.And(self.last_ct_mask, ct_valid)
+
         overlap_filter = sitk.LabelOverlapMeasuresImageFilter()
         try:
-            overlap_filter.Execute(self.mri_mask, self.last_ct_mask)
+            overlap_filter.Execute(mri_roi, ct_roi)
             return overlap_filter.GetDiceCoefficient()
         except:
             return 0.0
@@ -715,9 +765,9 @@ class FusoftApp(QMainWindow):
         # Mostrar spacing al panel de registre
         csp_final = ct_roi.GetSpacing()
         self.lbl_spacing.setText(
-            "Spacing (x\u00b7y\u00b7z mm):\n"
-            f"MRI: {mri_sp[0]:.2f} \u00b7 {mri_sp[1]:.2f} \u00b7 {mri_sp[2]:.2f}\n"
-            f"CT:  {csp_final[0]:.2f} \u00b7 {csp_final[1]:.2f} \u00b7 {csp_final[2]:.2f}"
+            "Spacing (x·y·z mm):\n"
+            f"MRI: {mri_sp[0]:.2f} · {mri_sp[1]:.2f} · {mri_sp[2]:.2f}\n"
+            f"CT:  {csp_final[0]:.2f} · {csp_final[1]:.2f} · {csp_final[2]:.2f}"
         )
 
         self.initial_transform = sitk.CenteredTransformInitializer(
@@ -727,16 +777,32 @@ class FusoftApp(QMainWindow):
         self.refresh_registration_view(is_live=False)
 
     def run_automated_registration(self):
-        reg_method = sitk.ImageRegistrationMethod()
-        reg_method.SetMetricAsMattesMutualInformation(50)
-        reg_method.SetInterpolator(sitk.sitkLinear)
-        reg_method.SetOptimizerAsRegularStepGradientDescent(2.0, 1e-4, 50)
-        reg_method.SetInitialTransform(sitk.Euler3DTransform(self.initial_transform))
-        final_tx = reg_method.Execute(self.mri_image, self.ct_cropped)
-        translations = final_tx.GetTranslation()
-        for i, key in enumerate(['tx', 'ty', 'tz']):
-            self.spin_boxes[key].setValue(translations[i])
+        if not self.mri_image or not self.ct_cropped:
+            return
+        # Evitar llançar dos workers alhora
+        if self._reg_worker is not None and self._reg_worker.isRunning():
+            return
+        self.btn_auto.setEnabled(False)
+        self.btn_auto.setText("Registrant... espera")
+        self._reg_worker = RegistrationWorker(
+            self.mri_image, self.ct_cropped, self.initial_transform
+        )
+        self._reg_worker.finished.connect(self._on_registration_done)
+        self._reg_worker.start()
+
+    def _on_registration_done(self, final_tx):
+        # final_tx ja conté la transformació completa (centering + optimització).
+        # Si posem la seva translació als spin boxes I mantenim self.initial_transform,
+        # el centering s'aplicaria dues vegades → CT fora de rang → DICE = 0.
+        # Solució: substituir initial_transform per final_tx i resetar spin boxes a 0.
+        self.initial_transform = final_tx
+        for spin in self.spin_boxes.values():
+            spin.blockSignals(True)
+            spin.setValue(0.0)
+            spin.blockSignals(False)
         self.refresh_registration_view(is_live=False)
+        self.btn_auto.setEnabled(True)
+        self.btn_auto.setText("Automated Registration")
 
     def save_final_output(self):
         if not hasattr(self, 'final_ct_output'):
