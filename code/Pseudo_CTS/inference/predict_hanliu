@@ -1,0 +1,139 @@
+"""
+inference/predict_hanliu.py
+---------------------------
+Thin wrapper around the han-liu/SynCT_TcMRgFUS inference script.
+
+Han-liu's repo must be cloned separately:
+    git clone https://github.com/han-liu/SynCT_TcMRgFUS /path/to/SynCT_TcMRgFUS
+
+And their conda environment activated (or dependencies installed):
+    pip install -r /path/to/SynCT_TcMRgFUS/requirements.txt
+
+The wrapper creates temporary input/output dirs, calls their
+`run_inference.py` as a subprocess, then copies the result to output_path.
+
+Usage (standalone):
+    python inference/predict_hanliu.py \
+        --mri        /path/to/sub-0020_T1w.nii.gz \
+        --out        /path/to/sub-0020_hanliu_pCT.nii.gz \
+        --repo       /path/to/SynCT_TcMRgFUS
+
+Programmatic:
+    from inference.predict_hanliu import run_hanliu_inference
+    run_hanliu_inference(mri_path, output_path, hanliu_repo)
+"""
+
+import argparse
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+import SimpleITK as sitk
+
+
+def run_hanliu_inference(
+    mri_path: str | Path,
+    output_path: str | Path,
+    hanliu_repo: str | Path,
+    overlap_ratio: float = 0.6,
+    python_bin: str = "python",
+) -> Path:
+    """Run han-liu cGAN inference on one MRI and save the pseudo-CT.
+
+    Parameters
+    ----------
+    mri_path      : input T1w MRI (.nii / .nii.gz)
+    output_path   : where to save the pseudo-CT (.nii.gz)
+    hanliu_repo   : path to the cloned SynCT_TcMRgFUS repository
+    overlap_ratio : sliding-window overlap (han-liu default 0.6)
+    python_bin    : python executable to use (e.g. path to venv python)
+
+    Returns
+    -------
+    Path to the saved pseudo-CT file.
+    """
+    mri_path    = Path(mri_path)
+    output_path = Path(output_path)
+    hanliu_repo = Path(hanliu_repo)
+
+    inference_script = hanliu_repo / "run_inference.py"
+    if not inference_script.exists():
+        raise FileNotFoundError(
+            f"run_inference.py not found in {hanliu_repo}. "
+            "Make sure the repo is cloned correctly."
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_in  = Path(tmpdir) / "input"
+        tmp_out = Path(tmpdir) / "output"
+        tmp_in.mkdir()
+        tmp_out.mkdir()
+
+        # Copy MRI into temp input dir (han-liu reads all .nii/.nii.gz in input_dir)
+        shutil.copy(mri_path, tmp_in / mri_path.name)
+
+        cmd = [
+            python_bin,
+            str(inference_script),
+            "--input_dir",    str(tmp_in),
+            "--output_dir",   str(tmp_out),
+            "--overlap_ratio", str(overlap_ratio),
+        ]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            cwd=str(hanliu_repo),
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Han-liu inference failed (returncode {result.returncode}):\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+
+        # Locate output file — han-liu typically writes <input_name>_sCT.nii.gz
+        output_files = sorted(tmp_out.glob("*.nii*"))
+        if not output_files:
+            raise FileNotFoundError(
+                f"Han-liu produced no output in {tmp_out}.\n"
+                f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+            )
+
+        # If multiple files, pick the one matching the input stem
+        stem = mri_path.name.split(".")[0]
+        matched = [f for f in output_files if stem in f.name]
+        chosen  = matched[0] if matched else output_files[0]
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(chosen, output_path)
+
+    return output_path
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Han-liu cGAN inference wrapper")
+    parser.add_argument("--mri",     required=True, type=Path, help="Input MRI (.nii/.nii.gz)")
+    parser.add_argument("--out",     required=True, type=Path, help="Output pseudo-CT path")
+    parser.add_argument("--repo",    required=True, type=Path, help="Path to SynCT_TcMRgFUS repo")
+    parser.add_argument("--overlap", default=0.6,  type=float, help="Sliding-window overlap")
+    parser.add_argument("--python",  default="python",          help="Python executable to use")
+    args = parser.parse_args()
+
+    print(f"MRI  : {args.mri}")
+    print(f"Repo : {args.repo}")
+
+    out = run_hanliu_inference(
+        mri_path=args.mri,
+        output_path=args.out,
+        hanliu_repo=args.repo,
+        overlap_ratio=args.overlap,
+        python_bin=args.python,
+    )
+    print(f"Saved: {out}")

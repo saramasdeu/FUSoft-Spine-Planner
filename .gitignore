@@ -17,6 +17,7 @@ models/
 
 # Models
 *.pth
+models/*.pt
 *.h5
 
 # Zips grans
@@ -25,3 +26,5 @@ models/
 # Carpetes pesades
 checkpoints/
 data/
+
+SynCT_TcMRgFUS/
