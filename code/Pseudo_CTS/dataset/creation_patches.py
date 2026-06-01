@@ -29,17 +29,12 @@ import SimpleITK as sitk
 # ===========================================================
 # CONFIGURATION
 # ===========================================================
-COREGISTRATION_DIR = "/Users/saramasdeusans/Desktop/coregistration_and_segmentation"
-VERTEBRAE_DIR      = "/Users/saramasdeusans/Desktop/Dataset vertebres format ok"
-OUTPUT_DIR         = "/Users/saramasdeusans/Desktop/DATASET_NET/patches"
+COREGISTRATION_DIR = "/home/sara/FUSoft-Spine-Planner/coregistration_and_segmentation"
+VERTEBRAE_DIR      = "/home/sara/FUSoft-Spine-Planner/Dataset vertebres format ok"
+OUTPUT_DIR         = "/home/sara/FUSoft-Spine-Planner/DATASET_NET/patches"
 
 # Subjects selected from coregistration_and_segmentation (no metal artefacts)
-SELECTED_IDS = [
-    "sub0003", "sub0005", "sub0006", "sub0007", "sub0008", "sub0009",
-    "sub0011", "sub0012", "sub0013", "sub0019", "sub0021", "sub0022",
-    "sub0026", "sub0027", "sub0029", "sub0030", "sub0032", "sub0034",
-    "sub0036", "sub0037",
-]
+SELECTED_IDS = [f"sub{str(i).zfill(4)}" for i in range(1, 38)]
 
 PATCH_SIZE              = (128, 128, 64)   # (X, Y, Z) in voxels
 PATCHES_PER_SUBJECT_DS1 = 6               # centred on segmentation mask
@@ -345,7 +340,7 @@ if __name__ == "__main__":
     print(f"  Patch size : {PATCH_SIZE}  (X, Y, Z)")
     print("=" * 60)
 
-    n1 = 0  # process_dataset1()
+    n1 = process_dataset1()
     n2 = process_dataset2()
 
     on_disk = len(glob.glob(os.path.join(OUTPUT_DIR, "*_mri.npy")))

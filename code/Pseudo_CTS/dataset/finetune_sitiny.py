@@ -28,7 +28,7 @@ REPO_ROOT    = os.path.dirname(os.path.dirname(SCRIPT_DIR))   # TFG_FUSOFT paren
 
 SITINY_REPO  = os.environ.get(
     "SITINY_REPO",
-    os.path.join(REPO_ROOT, "TFG_FUSOFT", "code", "Pseudo_CTS", "stinity_mr-to-pct"),
+    "/home/sara/FUSoft-Spine-Planner/stinity_mr-to-pct",
 )
 # Fallback: look relative to this script
 if not os.path.isdir(SITINY_REPO):
@@ -39,15 +39,14 @@ PATCHES_DIR  = os.environ.get(
     os.path.join(REPO_ROOT, "DATASET_NET", "patches"),
 )
 if not os.path.isdir(PATCHES_DIR):
-    PATCHES_DIR = os.path.join(os.path.expanduser("~"), "Desktop", "DATASET_NET", "patches")
+    PATCHES_DIR = "/home/sara/FUSoft-Spine-Planner/DATASET_NET/patches"
 
 MODEL_IN     = os.environ.get(
     "MODEL_IN",
     os.path.join(REPO_ROOT, "TFG_FUSOFT", "models", "pretrained_net_final_20220825.pth"),
 )
 if not os.path.exists(MODEL_IN):
-    MODEL_IN = os.path.join(os.path.expanduser("~"), "Desktop", "TFG_FUSOFT",
-                            "models", "pretrained_net_final_20220825.pth")
+    MODEL_IN = "/home/sara/FUSoft-Spine-Planner/models/pretrained_net_final_20220825.pth"
 
 OUTPUT_DIR   = os.environ.get(
     "OUTPUT_DIR",
@@ -58,14 +57,15 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 # HYPER-PARAMETERS
 # ---------------------------------------------------------------------------
-EPOCHS        = 100
+EPOCHS        = 150
 BATCH_SIZE    = 2
-LR            = 1e-4
-VAL_SPLIT     = 0.15        # fraction of patches used for validation
+LR            = 5e-6        # very low: preserve pretrained knowledge
+FREEZE_ENCODER = True       # freeze encoder, only train decoder
+VAL_SPLIT     = 0.15
 NUM_WORKERS   = 2
 SEED          = 42
-PATIENCE      = 15          # early stopping patience (epochs without improvement)
-SAVE_EVERY    = 10          # save a checkpoint every N epochs (in addition to best)
+PATIENCE      = 25
+SAVE_EVERY    = 10
 
 # ---------------------------------------------------------------------------
 # IMPORT NETWORK
@@ -101,12 +101,16 @@ class PatchDataset(Dataset):
         mri = np.load(self.pairs[idx][0]).astype(np.float32)
         ct  = np.load(self.pairs[idx][1]).astype(np.float32)
 
+        # CT patches were saved normalised to [-1, 1] via normalise_ct:
+        #   arr = (arr_hu + 1000) / 1500.0 - 1.0
+        # Invert to HU so the fine-tuning target matches the pretrained output scale.
+        ct = (ct + 1.0) * 1500.0 - 1000.0
+
         # Ensure shape is (Z, Y, X); add channel dim → (1, Z, Y, X)
         mri = np.expand_dims(mri, 0)
         ct  = np.expand_dims(ct,  0)
 
         if self.augment:
-            # Random axis flips (axes 1,2,3 = Z,Y,X)
             for ax in range(1, 4):
                 if np.random.rand() > 0.5:
                     mri = np.flip(mri, axis=ax).copy()
@@ -166,11 +170,24 @@ def train():
         net.load_state_dict(state)
         print(f"\n  Loaded pretrained weights from: {MODEL_IN}")
 
-    # --- Loss & optimiser ---
+    # --- Freeze encoder (preserve pretrained knowledge) ---
+    if FREEZE_ENCODER:
+        # ShuffleUNet: model.model[0] = encoder blocks, model.model[1] = decoder
+        # Freeze the first half (encoder + bottleneck)
+        total_params  = list(net.parameters())
+        freeze_until  = len(total_params) // 2
+        for i, p in enumerate(total_params):
+            if i < freeze_until:
+                p.requires_grad = False
+        trainable = sum(p.numel() for p in net.parameters() if p.requires_grad)
+        total     = sum(p.numel() for p in net.parameters())
+        print(f"  Encoder frozen. Trainable params: {trainable:,} / {total:,}")
+
+    # --- Loss & optimiser (only trainable params) ---
     criterion = nn.L1Loss()
-    optimizer = torch.optim.Adam(net.parameters(), lr=LR)
+    optimizer = torch.optim.Adam(filter(lambda p: p.requires_grad, net.parameters()), lr=LR)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=7, verbose=True,
+        optimizer, mode="min", factor=0.5, patience=7,
     )
 
     # --- Training ---
