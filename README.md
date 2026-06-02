@@ -2,7 +2,7 @@
 
 **FUSoft** is a surgical planning platform designed to optimize **Transcranial MR-guided Focused Ultrasound (TcMRgFUS)** treatments in the spine. The system automates image processing to enable precise ultrasound focusing, minimizing risks and maximizing thermal efficiency.
 
-Developed as a Bachelor's Thesis (TFG) — Universitat Pompeu Fabra, 2026.
+Developed as a Bachelor's Thesis (TFG) — 2026.
 
 ---
 
