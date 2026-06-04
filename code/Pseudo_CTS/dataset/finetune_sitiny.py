@@ -60,19 +60,19 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # ---------------------------------------------------------------------------
 # HYPER-PARAMETERS
 # ---------------------------------------------------------------------------
-EPOCHS         = 150
+EPOCHS         = 80
 BATCH_SIZE     = 2
-LR             = 1e-5        # slightly higher: distillation prevents forgetting
-FREEZE_ENCODER = False       # unfreeze all: distillation handles regularization
+LR             = 5e-5        # higher LR for decoder (encoder frozen)
+FREEZE_ENCODER = True        # freeze encoder to preserve pretrained knowledge
 VAL_SPLIT      = 0.15
 NUM_WORKERS    = 2
 SEED           = 42
-PATIENCE       = 30
+PATIENCE       = 20
 SAVE_EVERY     = 10
 
 # Knowledge distillation weights
 TASK_ALPHA     = 1.0         # weight for L1(pred, ct_target)
-DISTILL_ALPHA  = 2.0         # weight for MSE(pred, teacher_pred) — stronger regularizer
+DISTILL_ALPHA  = 0.3         # mild regularizer — allows vertebrae adaptation
 
 # ---------------------------------------------------------------------------
 # IMPORT NETWORK

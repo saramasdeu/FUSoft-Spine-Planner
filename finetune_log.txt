@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "/Users/saramasdeusans/Desktop/TFG_FUSOFT/code/Pseudo_CTS/dataset/finetune_sitiny.py", line 58, in <module>
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/os.py", line 215, in makedirs
+    makedirs(head, exist_ok=exist_ok)
+  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/os.py", line 215, in makedirs
+    makedirs(head, exist_ok=exist_ok)
+  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/os.py", line 215, in makedirs
+    makedirs(head, exist_ok=exist_ok)
+  File "/Library/Frameworks/Python.framework/Versions/3.10/lib/python3.10/os.py", line 225, in makedirs
+    mkdir(name, mode)
+OSError: [Errno 45] Operation not supported: '/home/sara'
