@@ -11,7 +11,15 @@ Developed as a Bachelor's Thesis (TFG) — 2026.
 ```
 TFG_FUSOFT/
 ├── code/
-│   ├── coregistration/          # MRI–CT co-registration (ANTs + SimpleITK)
+│   ├── coregistration/                  # MRI–CT co-registration (ANTs + SimpleITK)
+│   │   ├── Co-registre.py               # Core co-registration script. Aligns MRI
+│   │   │                                # and CT images using rigid registration
+│   │   │                                # (ANTs + SimpleITK).
+│   │   └── Coregistration(pyqt6).py     # Graphical user interface (PyQt6) for the
+│   │                                    # co-registration pipeline. Intended as the
+│   │                                    # end-user tool: allows loading MRI and CT
+│   │                                    # files, launching registration, and saving
+│   │                                    # the result without using the command line.
 │   ├── Pseudo_CTS/              # Pseudo-CT generation pipeline
 │   │   │
 │   │   ├── stinity_avaluator.py         # Main local inference tool (Mac).
@@ -56,8 +64,67 @@ TFG_FUSOFT/
 │   │       ├── sitiny_eval/             # Figures and metrics for the 36 DB1 subjects
 │   │       └── finetuned_eval/          # Pretrained vs fine-tuned comparison CSV and figures
 │   │
-│   ├── Lamina_segmentation/     # Vertebral lamina segmentation (nnU-Net)
-│   └── Trajectories/            # FUS trajectory optimisation
+│   ├── Lamina_segmentation/             # Vertebral lamina segmentation (nnU-Net)
+│   │   │
+│   │   ├── segmenta_lamina.py           # Main end-to-end pipeline (CT or MRI).
+│   │   │                                # Auto-detects modality from HU values,
+│   │   │                                # runs TotalSegmentator for vertebra
+│   │   │                                # detection, crops per vertebra, runs
+│   │   │                                # the appropriate nnUNet model, and
+│   │   │                                # reconstructs the full lamina mask in
+│   │   │                                # the original image space (.nii.gz).
+│   │   │
+│   │   ├── CT_segmentation/             # CT branch — Dataset001_Lamina
+│   │   │   ├── preprocess_lamina_ct.py  # Builds the nnUNet CT dataset from raw
+│   │   │   │                            # CTs + 3D Slicer annotations (.seg.nrrd).
+│   │   │   │                            # Generates per-vertebra crops with 2
+│   │   │   │                            # channels (normalised CT + vertebra mask),
+│   │   │   │                            # resampled to 1 mm isotropic. 20 subjects:
+│   │   │   │                            # 5 with lamina → imagesTr/labelsTr,
+│   │   │   │                            # 15 without → imagesTs.
+│   │   │   │
+│   │   │   ├── train_nunnet_ct.py       # Standalone training script for the CT
+│   │   │   │                            # model. Unpacks Dataset001_Lamina.zip,
+│   │   │   │                            # runs nnUNetv2_plan_and_preprocess, then
+│   │   │   │                            # nnUNetv2_train (3d_fullres, fold 0).
+│   │   │   │                            # Supports GPU auto-detection (CUDA / MPS /
+│   │   │   │                            # CPU) and resume from checkpoint.
+│   │   │   │
+│   │   │   ├── run_inference_ct.py      # Local inference script for CT crops.
+│   │   │   │                            # Copies checkpoint_best.pth, generates
+│   │   │   │                            # nnUNet plans, and runs nnUNetv2_predict
+│   │   │   │                            # on imagesTs cases (CPU or GPU).
+│   │   │   │
+│   │   │   └── seg_nrrd_utils_ct.py     # Utility library for reading 3D Slicer
+│   │   │                                # .seg.nrrd files (3D labelmap and 4D
+│   │   │                                # layer formats). Provides read_seg_nrrd,
+│   │   │                                # get_segment_mask, get_combined_mask and
+│   │   │                                # find_matching_lamina_segments helpers.
+│   │   │                                # Used by preprocess_lamina_ct.py.
+│   │   │
+│   │   └── MRI_segmentation/            # MRI branch — Dataset002_Lamina
+│   │       ├── preprocess_mri.py        # Builds the nnUNet MRI dataset from FLAIR
+│   │       │                            # images + 3D Slicer annotations. Generates
+│   │       │                            # per-vertebra crops with 2 channels (FLAIR
+│   │       │                            # + vertebra mask), 1 mm isotropic. 20
+│   │       │                            # subjects: 10 with lamina → imagesTr/
+│   │       │                            # labelsTr, 10 without → imagesTs.
+│   │       │
+│   │       ├── nunnet_train_mri.py      # Training script for the MRI model.
+│   │       │                            # Runs plan_and_preprocess and
+│   │       │                            # nnUNetv2_train on Dataset002_Lamina
+│   │       │                            # (3d_fullres, fold 0).
+│   │       │
+│   │       └── run_inference_mri.py     # Runs nnUNetv2_predict on the MRI test
+│   │                                    # crops (Dataset002_Lamina/imagesTs) and
+│   │                                    # saves per-vertebra predictions.
+│   │
+│   └── Trajectories/                    # FUS trajectory optimisation
+│       └── optimization.py              # Computes the optimal FUS transducer
+│                                        # trajectory to reach a spinal cord target.
+│                                        # Uses a heuristic approach over the
+│                                        # pseudo-CT bone map to find the acoustic
+│                                        # path with minimal bone obstruction.
 └── models/                      # Model weights (not tracked — see below)
 ```
 
