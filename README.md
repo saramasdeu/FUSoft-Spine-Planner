@@ -13,18 +13,49 @@ TFG_FUSOFT/
 ├── code/
 │   ├── coregistration/          # MRI–CT co-registration (ANTs + SimpleITK)
 │   ├── Pseudo_CTS/              # Pseudo-CT generation pipeline
-│   │   ├── stinity_avaluator.py         # Interactive local tool (Mac)
-│   │   ├── stinity_mr-to-pct/           # Sitiny model (submodule/clone)
-│   │   ├── dataset/
-│   │   │   ├── creation_patches.py      # Generate MRI/CT patch pairs (.npy)
-│   │   │   ├── finetune_sitiny.py       # Fine-tune ShuffleUNet on vertebrae patches
-│   │   │   ├── evaluate_finetuned.py    # Compare pretrained vs fine-tuned (DB1)
-│   │   │   └── evaluate_vertebrae.py    # Evaluate on vertebrae-only subject
-│   │   ├── scripts/
-│   │   │   ├── evaluate_sitiny.py       # Batch evaluation of Sitiny model (server)
-│   │   └── results/
-│   │       ├── sitiny_eval/             # Figures + metrics (36 DB1 subjects)
-│   │       └── finetuned_eval/          # Fine-tuning comparison CSV
+│   │   │
+│   │   ├── stinity_avaluator.py         # Main local inference tool (Mac).
+│   │   │                                # Loads a T1 MRI, runs ShuffleUNet and
+│   │   │                                # saves the pseudo-CT as a NIfTI file.
+│   │   │
+│   │   ├── stinity_mr-to-pct/           # Original Sitiny repository (cloned).
+│   │   │   │                            # Do not modify — used as a library.
+│   │   │   └── utils/
+│   │   │       ├── netdef.py            # ShuffleUNet architecture definition
+│   │   │       ├── infer_funcs.py       # Inference pipeline (with ANTs preprocessing)
+│   │   │       └── infer_funcs_noants.py# Inference pipeline (server, without ANTs)
+│   │   │
+│   │   ├── SynCT_TcMRgFUS/             # Original Han-Liu repository (cloned).
+│   │   │                                # Pix2Pix 3D model evaluated but excluded
+│   │   │                                # from final results due to domain gap.
+│   │   │
+│   │   ├── dataset/                     # Scripts for patch generation and fine-tuning
+│   │   │   ├── creation_patches.py      # Extracts paired MRI/CT patches (.npy) from
+│   │   │   │                            # DS1 (37 subjects) and DS2 (5 vertebrae subjects),
+│   │   │   │                            # centred on the vertebrae segmentation mask.
+│   │   │   │
+│   │   │   ├── finetune_sitiny.py       # Fine-tunes the pretrained ShuffleUNet on the
+│   │   │   │                            # generated vertebrae patches. Uses knowledge
+│   │   │   │                            # distillation (frozen teacher = pretrained model)
+│   │   │   │                            # to prevent catastrophic forgetting.
+│   │   │   │
+│   │   │   ├── evaluate_finetuned.py    # Compares pretrained vs fine-tuned model on all
+│   │   │   │                            # DB1 subjects (36). Computes MAE and SSIM both
+│   │   │   │                            # globally and in the vertebrae region specifically.
+│   │   │   │                            # Saves comparison figures and a CSV with results.
+│   │   │   │
+│   │   │   └── evaluate_vertebrae.py    # Evaluates both models on a single vertebrae-only
+│   │   │                                # subject (DS2: CT_1.nii + MRI_1.nii).
+│   │   │
+│   │   ├── scripts/                     # Batch scripts designed to run on the GPU server
+│   │   │   └── evaluate_sitiny.py       # Runs full inference + metrics for the pretrained
+│   │   │                                # Sitiny model over all 36 DB1 subjects.
+│   │   │                                # Saves per-subject figures and a summary CSV.
+│   │   │
+│   │   └── results/                     # Generated outputs (not tracked in Git)
+│   │       ├── sitiny_eval/             # Figures and metrics for the 36 DB1 subjects
+│   │       └── finetuned_eval/          # Pretrained vs fine-tuned comparison CSV and figures
+│   │
 │   ├── Lamina_segmentation/     # Vertebral lamina segmentation (nnU-Net)
 │   └── Trajectories/            # FUS trajectory optimisation
 └── models/                      # Model weights (not tracked — see below)
